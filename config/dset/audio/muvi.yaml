@@ -1,0 +1,12 @@
+# @package __global__
+
+# total samples obtained from MusicCaps = 5469
+# (out of 5521 due to AudioSet corrupted samples)
+datasource:
+  max_sample_rate: 44100
+  max_channels: 2
+
+  train: egs/muvi/train  
+  valid: egs/muvi/test  
+  evaluate: egs/muvi/test
+  generate: egs/muvi/test # identical to evaluate

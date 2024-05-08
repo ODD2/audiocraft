@@ -110,6 +110,7 @@ class SegmentWithAttributes(SegmentInfo):
     All child classes should implement `to_condition_attributes` that converts
     the existing attributes to a dataclass of type ConditioningAttributes.
     """
+
     def to_condition_attributes(self) -> ConditioningAttributes:
         raise NotImplementedError()
 
@@ -181,6 +182,7 @@ class Tokenizer:
     """Base tokenizer implementation
     (in case we want to introduce more advances tokenizers in the future).
     """
+
     def __call__(self, texts: tp.List[tp.Optional[str]]) -> tp.Tuple[torch.Tensor, torch.Tensor]:
         raise NotImplementedError()
 
@@ -263,6 +265,7 @@ class NoopTokenizer(Tokenizer):
     ["Queen", "ABBA", "Jeff Buckley"] => [43, 55, 101]
     ["Metal", "Rock", "Classical"] => [0, 223, 51]
     """
+
     def __init__(self, n_bins: int, pad_idx: int = 0):
         self.n_bins = n_bins
         self.pad_idx = pad_idx
@@ -293,6 +296,7 @@ class BaseConditioner(nn.Module):
         dim (int): Hidden dim of the model.
         output_dim (int): Output dim of the conditioner.
     """
+
     def __init__(self, dim: int, output_dim: int):
         super().__init__()
         self.dim = dim
@@ -334,6 +338,7 @@ class LUTConditioner(TextConditioner):
         tokenizer (str): Name of the tokenizer.
         pad_idx (int, optional): Index for padding token. Defaults to 0.
     """
+
     def __init__(self, n_bins: int, dim: int, output_dim: int, tokenizer: str, pad_idx: int = 0):
         super().__init__(dim, output_dim)
         self.embed = nn.Embedding(n_bins, dim)
@@ -466,6 +471,7 @@ class WaveformConditioner(BaseConditioner):
         output_dim (int): Output dimension.
         device (tp.Union[torch.device, str]): Device.
     """
+
     def __init__(self, dim: int, output_dim: int, device: tp.Union[torch.device, str]):
         super().__init__(dim, output_dim)
         self.device = device
@@ -529,6 +535,7 @@ class ChromaStemConditioner(WaveformConditioner):
         device (tp.Union[torch.device, str], optional): Device for the conditioner.
         **kwargs: Additional parameters for the chroma extractor.
     """
+
     def __init__(self, output_dim: int, sample_rate: int, n_chroma: int, radix2_exp: int,
                  duration: float, match_len_on_eval: bool = True, eval_wavs: tp.Optional[str] = None,
                  n_eval_wavs: int = 0, cache_path: tp.Optional[tp.Union[str, Path]] = None,
@@ -712,6 +719,7 @@ class JointEmbeddingConditioner(BaseConditioner):
         bins (int): Quantizers' codebooks size (used if quantize is true).
         kwargs: Additional parameters for residual vector quantizer.
     """
+
     def __init__(self, dim: int, output_dim: int, device: str, attribute: str,
                  autocast_dtype: tp.Optional[str] = 'float32', quantize: bool = True,
                  n_q: int = 12, bins: int = 1024, **kwargs):
@@ -786,6 +794,7 @@ class CLAPEmbeddingConditioner(JointEmbeddingConditioner):
         cache_path (Optional[str]): Path for pre-computed embeddings caching.
         kwargs: Additional parameters for residual vector quantizer.
     """
+
     def __init__(self, dim: int, output_dim: int, device: str, attribute: str,
                  quantize: bool, n_q: int, bins: int, checkpoint: tp.Union[str, Path], model_arch: str,
                  enable_fusion: bool, sample_rate: int, max_audio_length: int, audio_stride: int,
@@ -897,7 +906,7 @@ class CLAPEmbeddingConditioner(JointEmbeddingConditioner):
             wav = einops.rearrange(wav, 'b f t -> (b f) t')
             embed_list = []
             for i in range(0, wav.size(0), self.batch_size):
-                _wav = wav[i:i+self.batch_size, ...]
+                _wav = wav[i:i + self.batch_size, ...]
                 _embed = self.clap.get_audio_embedding_from_data(_wav, use_tensor=True)
                 embed_list.append(_embed)
             embed = torch.cat(embed_list, dim=0)
@@ -986,13 +995,15 @@ class CLAPEmbeddingConditioner(JointEmbeddingConditioner):
     def _get_embed(self, x: JointEmbedCondition) -> tp.Tuple[torch.Tensor, torch.Tensor]:
         """Extract shared latent representation from either the wav or the text using CLAP."""
         # decide whether to use text embedding at train time or not
+        # TODO: why use wav embedding only while training, is it forbidden during evaluation?
         use_text_embed = random.random() < self.text_p
-        if self.training and not use_text_embed:
-            embed = self._get_wav_embedding(x)
-            empty_idx = torch.LongTensor([])  # we assume we always have the audio wav
-        else:
+        if self.training and use_text_embed:
             embed = self._get_text_embedding(x)
             empty_idx = torch.LongTensor([i for i, xi in enumerate(x.text) if xi is None or xi == ""])
+        else:
+            embed = self._get_wav_embedding(x)
+            empty_idx = torch.LongTensor([])  # we assume we always have the audio wav
+
         return embed, empty_idx
 
 
@@ -1029,6 +1040,7 @@ def dropout_condition(sample: ConditioningAttributes, condition_type: str, condi
 
 class DropoutModule(nn.Module):
     """Base module for all dropout modules."""
+
     def __init__(self, seed: int = 1234):
         super().__init__()
         self.rng = torch.Generator()
@@ -1052,6 +1064,7 @@ class AttributeDropout(DropoutModule):
         active_on_eval (bool, optional): Whether the dropout is active at eval. Default to False.
         seed (int, optional): Random seed.
     """
+
     def __init__(self, p: tp.Dict[str, tp.Dict[str, float]], active_on_eval: bool = False, seed: int = 1234):
         super().__init__(seed=seed)
         self.active_on_eval = active_on_eval
@@ -1090,6 +1103,7 @@ class ClassifierFreeGuidanceDropout(DropoutModule):
         p (float): Probability to apply condition dropout during training.
         seed (int): Random seed.
     """
+
     def __init__(self, p: float, seed: int = 1234):
         super().__init__(seed=seed)
         self.p = p
@@ -1111,7 +1125,7 @@ class ClassifierFreeGuidanceDropout(DropoutModule):
 
         # nullify conditions of all attributes
         samples = deepcopy(samples)
-        for condition_type in ["wav", "text"]:
+        for condition_type in ["wav", "text", "joint_embed"]:
             for sample in samples:
                 for condition in sample.attributes[condition_type]:
                     dropout_condition(sample, condition_type, condition)
@@ -1128,6 +1142,7 @@ class ConditioningProvider(nn.Module):
         conditioners (dict): Dictionary of conditioners.
         device (torch.device or str, optional): Device for conditioners and output condition types.
     """
+
     def __init__(self, conditioners: tp.Dict[str, BaseConditioner], device: tp.Union[torch.device, str] = "cpu"):
         super().__init__()
         self.device = device

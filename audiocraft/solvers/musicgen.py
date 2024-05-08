@@ -119,7 +119,7 @@ class MusicGenSolver(base.StandardSolver):
         assert self.compression_model.sample_rate == self.cfg.sample_rate, (
             f"Compression model sample rate is {self.compression_model.sample_rate} but "
             f"Solver sample rate is {self.cfg.sample_rate}."
-            )
+        )
         # ensure we have matching configuration between LM and compression model
         assert self.cfg.transformer_lm.card == self.compression_model.cardinality, (
             "Cardinalities of the LM and compression model don't match: ",
@@ -140,6 +140,17 @@ class MusicGenSolver(base.StandardSolver):
             assert not self.cfg.autocast, "Cannot use autocast with fsdp"
             self.model = self.wrap_with_fsdp(self.model)
         self.register_ema('model')
+
+        # partial tuning of the model
+        if len(self.cfg.od.match_req_grad) > 0:
+            for k, v in self.model.named_parameters():
+                for text in self.cfg.od.match_req_grad:
+                    if (text in k):
+                        v.requires_grad_(True)
+                        break
+                else:
+                    v.requires_grad_(False)
+
         # initialize optimization
         self.optimizer = builders.get_optimizer(builders.get_optim_parameter_groups(self.model), self.cfg.optim)
         self.lr_scheduler = builders.get_lr_scheduler(self.optimizer, self.cfg.schedule, self.total_updates)
