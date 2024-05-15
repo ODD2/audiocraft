@@ -34,6 +34,7 @@ from ..modules.conditioners import (
     ConditioningProvider,
     LUTConditioner,
     T5Conditioner,
+    CLIPEmbeddingConditioner
 )
 from .unet import DiffusionUnet
 from .. import quantization as qt
@@ -153,6 +154,13 @@ def get_conditioner_provider(output_dim: int, cfg: omegaconf.DictConfig) -> Cond
                 device=device,
                 **model_args
             )
+        elif model_type == 'clip':
+            conditioners[str(cond)] = CLIPEmbeddingConditioner(
+                output_dim=output_dim,
+                device=device,
+                **model_args
+            )
+
         else:
             raise ValueError(f"Unrecognized conditioning model: {model_type}")
     conditioner = ConditioningProvider(conditioners, device=device, **condition_provider_args)
@@ -215,7 +223,7 @@ def get_diffusion_model(cfg: omegaconf.DictConfig):
     channels = cfg.channels
     num_steps = cfg.schedule.num_steps
     return DiffusionUnet(
-            chin=channels, num_steps=num_steps, **cfg.diffusion_unet)
+        chin=channels, num_steps=num_steps, **cfg.diffusion_unet)
 
 
 def get_processor(cfg, sample_rate: int = 24000):

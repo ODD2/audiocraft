@@ -29,6 +29,9 @@ from ..modules.conditioners import (
 )
 from ..utils.utils import warn_once
 
+import torchvision
+from torchvision.io import VideoReader as TorchVideoReader
+from torchvision.transforms import Compose, Resize, CenterCrop, InterpolationMode
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +204,7 @@ class MusicDataset(InfoAudioDataset):
 
     See `audiocraft.data.info_audio_dataset.InfoAudioDataset` for full initialization arguments.
     """
+
     def __init__(self, *args, info_fields_required: bool = True,
                  merge_text_p: float = 0., drop_desc_p: float = 0., drop_other_p: float = 0.,
                  joint_embed_attributes: tp.List[str] = [],
@@ -214,6 +218,10 @@ class MusicDataset(InfoAudioDataset):
         self.drop_other_p = drop_other_p
         self.joint_embed_attributes = joint_embed_attributes
         self.paraphraser = None
+        self.frame_transform = Compose([
+            Resize((380, 380), interpolation=InterpolationMode.BICUBIC, antialias=True)
+        ])
+
         if paraphrase_source is not None:
             self.paraphraser = Paraphraser(paraphrase_source, paraphrase_p)
 
@@ -221,6 +229,7 @@ class MusicDataset(InfoAudioDataset):
         wav, info = super().__getitem__(index)
         info_data = info.to_dict()
         music_info_path = Path(info.meta.path).with_suffix('.json')
+        music_video_path = Path(info.meta.path).with_suffix('.mp4')
 
         if Path(music_info_path).exists():
             with open(music_info_path, 'r') as json_file:
@@ -235,18 +244,72 @@ class MusicDataset(InfoAudioDataset):
         else:
             music_info = MusicInfo.from_dict(info_data, fields_required=False)
 
+        if Path(music_video_path).exists():
+            frames = fetch_frames(
+                video_path=str(music_video_path),
+                duration=info.n_frames / info.sample_rate,
+                offset=info.seek_time,
+                transform=self.frame_transform,
+                num_frames=10
+            )
+
         music_info.self_wav = WavCondition(
             wav=wav[None], length=torch.tensor([info.n_frames]),
-            sample_rate=[info.sample_rate], path=[info.meta.path], seek_time=[info.seek_time])
+            sample_rate=[info.sample_rate], path=[info.meta.path], seek_time=[info.seek_time]
+        )
 
         for att in self.joint_embed_attributes:
             att_value = getattr(music_info, att)
             joint_embed_cond = JointEmbedCondition(
                 wav[None], [att_value], torch.tensor([info.n_frames]),
-                sample_rate=[info.sample_rate], path=[info.meta.path], seek_time=[info.seek_time])
+                sample_rate=[info.sample_rate], path=[info.meta.path], seek_time=[info.seek_time],
+                frames=frames
+            )
             music_info.joint_embed[att] = joint_embed_cond
 
         return wav, music_info
+
+
+# def fetch_frames(video_path, duration, offset=0, num_frames=10, transform=(lambda x: x)):
+#     vr = TorchVideoReader(video_path, "video")
+#     stride = duration / (num_frames - 1)  # number of video frames
+#     frames = []
+#     for i in range(num_frames):
+#         print(offset + i * stride)
+#         vr.seek(offset + i * stride)
+#         frame = next(vr)["data"]
+#         frame = transform(frame)
+#         frames.append(frame)
+#     frames = torch.stack(frames)
+#     del vr
+#     return frames
+
+
+# def fetch_frames(video_path, duration, offset=0, num_frames=10, transform=(lambda x: x)):
+#     from decord import VideoReader as DecordVideoReader
+#     vr = DecordVideoReader(video_path)
+#     fps = vr.get_avg_fps()
+#     offset = int(offset * fps)
+#     duration = int(duration * fps)
+
+#     stride = int((min(offset + duration, len(vr)) - offset) / (num_frames - 1))  # number of video frames
+#     frames = vr.get_batch([offset + i * stride for i in range(num_frames)]).asnumpy()
+#     frames = torch.from_numpy(frames).permute((0, 3, 1, 2))
+#     frames = transform(frames)
+
+#     del vr
+#     return frames
+
+
+def fetch_frames(video_path, duration, offset=0, num_frames=10, transform=(lambda x: x)):
+    frames = torchvision.io.read_video(video_path, offset, offset + duration, 'sec', 'TCHW')[0]
+    if (num_frames > 1):
+        stride = (frames.shape[0] - 1) / (num_frames - 1)  # number of video frames
+    else:
+        stride = 0
+    frames = frames[[int(i * stride) for i in range(num_frames)]]
+    frames = transform(frames)
+    return frames
 
 
 def get_musical_key(value: tp.Optional[str]) -> tp.Optional[str]:

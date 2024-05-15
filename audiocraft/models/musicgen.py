@@ -313,39 +313,14 @@ class MusicGen(BaseGenModel):
 class MusicGenCLAP(MusicGen):
     @staticmethod
     def get_pretrained(name: str = 'facebook/musicgen-melody', device=None):
-        """Return pretrained model, we provide four models:
-        - facebook/musicgen-small (300M), text to music,
-          # see: https://huggingface.co/facebook/musicgen-small
-        - facebook/musicgen-medium (1.5B), text to music,
-          # see: https://huggingface.co/facebook/musicgen-medium
-        - facebook/musicgen-melody (1.5B) text to music and text+melody to music,
-          # see: https://huggingface.co/facebook/musicgen-melody
-        - facebook/musicgen-large (3.3B), text to music,
-          # see: https://huggingface.co/facebook/musicgen-large
-        """
         if device is None:
             if torch.cuda.device_count():
                 device = 'cuda'
             else:
                 device = 'cpu'
 
-        if name == 'debug':
-            # used only for unit tests
-            compression_model = get_debug_compression_model(device)
-            lm = get_debug_lm_model(device)
-            return MusicGen(name, compression_model, lm, max_duration=30)
-
-        if name in _HF_MODEL_CHECKPOINTS_MAP:
-            warnings.warn(
-                "MusicGen pretrained model relying on deprecated checkpoint mapping. " +
-                f"Please use full pre-trained id instead: facebook/musicgen-{name}")
-            name = _HF_MODEL_CHECKPOINTS_MAP[name]
-
         lm = load_lm_model(name, device=device)
         compression_model = load_compression_model(name, device=device)
-        if 'self_wav' in lm.condition_provider.conditioners:
-            lm.condition_provider.conditioners['self_wav'].match_len_on_eval = True
-            lm.condition_provider.conditioners['self_wav']._use_masking = False
 
         return MusicGenCLAP(name, compression_model, lm)
 
@@ -416,5 +391,68 @@ class MusicGenCLAP(MusicGen):
             pass
         else:
             prompt_tokens = None
+
+        return attributes, prompt_tokens
+
+
+class MusicGenCLIP(MusicGen):
+    @staticmethod
+    def get_pretrained(name: str, device=None):
+        if device is None:
+            if torch.cuda.device_count():
+                device = 'cuda'
+            else:
+                device = 'cpu'
+
+        lm = load_lm_model(name, device=device)
+        compression_model = load_compression_model(name, device=device)
+
+        return MusicGenCLIP(name, compression_model, lm)
+
+    def generate_with_clip_embed(
+        self,
+        clips: MelodyList,
+        progress: bool = False,
+    ) -> tp.Union[torch.Tensor, tp.Tuple[torch.Tensor, torch.Tensor]]:
+        """Generate samples conditioned on text and melody.
+
+        Args:
+            descriptions (list of str): A list of strings used as text conditioning.
+            melody_wavs: (torch.Tensor or list of Tensor): A batch of waveforms used as
+                melody conditioning. Should have shape [B, C, T] with B matching the description length,
+                C=1 or 2. It can be [C, T] if there is a single description. It can also be
+                a list of [C, T] tensors.
+            melody_sample_rate: (int): Sample rate of the melody waveforms.
+            progress (bool, optional): Flag to display progress of the generation process. Defaults to False.
+        """
+
+        attributes, prompt_tokens = self._prepare_tokens_and_attributes(
+            clips=clips
+        )
+
+        assert prompt_tokens is None
+        tokens = self._generate_tokens(attributes, prompt_tokens, progress)
+
+        return self.generate_audio(tokens)
+
+    @torch.no_grad()
+    def _prepare_tokens_and_attributes(
+        self,
+        clips: tp.Optional[MelodyList]
+    ) -> tp.Tuple[tp.List[ConditioningAttributes], tp.Optional[torch.Tensor]]:
+        attributes = [
+            ConditioningAttributes(
+                joint_embed={
+                    'description': JointEmbedCondition(
+                        torch.zeros((1, 1, 1)), [""], torch.zeros(1),
+                        sample_rate=[0], path=[""], seek_time=[0],
+                        frames=frames
+                    )
+                }
+            )
+            for frames in clips
+        ]
+
+        prompt_tokens = None
 
         return attributes, prompt_tokens
