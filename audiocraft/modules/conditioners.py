@@ -1043,18 +1043,44 @@ class CLIPEmbeddingConditioner(JointEmbeddingConditioner):
     """
 
     def __init__(self, dim: int, output_dim: int, device: str, attribute: str, model_arch: str,
-                 normalize: bool, batch_size: tp.Optional[int] = None, reduce: bool = True,
+                 normalize: bool, model_type: str = "origin", batch_size: tp.Optional[int] = None, reduce: bool = True,
                  autocast_dtype: tp.Optional[str] = 'float32', **kwargs):
+
+        super(JointEmbeddingConditioner, self).__init__(dim=dim, output_dim=output_dim)
+
         try:
-            import clip  # type: ignore
+            import vclip  # type: ignore
             from PIL import Image
             from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, InterpolationMode
             BICUBIC = InterpolationMode.BICUBIC
         except ImportError:
             raise ImportError("Please install CLIP to use the CLIPEmbeddingConditioner")
 
-        clip_model, _ = clip.load(model_arch, device="cpu")
-        visual_model = clip_model.visual.float()
+        if model_type == "origin":
+            try:
+                import vclip  # type: ignore
+                from PIL import Image
+                from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, InterpolationMode
+                BICUBIC = InterpolationMode.BICUBIC
+            except ImportError:
+                raise ImportError("Please install CLIP to use the CLIPEmbeddingConditioner")
+
+            clip_model, _ = vclip.load(model_arch, device="cpu")
+            extractor = clip_model.visual.float()
+            extractor.requires_grad_(False)
+
+        elif model_type == "syno":
+            from od.svl import SynoVideoAttrExtractor, OpMode
+
+            extractor = SynoVideoAttrExtractor(
+                architecture=model_arch,
+                text_embed=True,
+                op_mode=OpMode.S,
+                s_v_attr="k"
+            )
+            self._decoder = extractor.decoder
+            extractor.requires_grad_(False)
+            extractor.decoder.requires_grad_(True)
 
         def _convert_image_to_rgb(image):
             if (isinstance(image, Image.Image)):
@@ -1079,11 +1105,12 @@ class CLIPEmbeddingConditioner(JointEmbeddingConditioner):
                 Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),
             ])
 
-        visual_model.eval()
-        visual_model.to(device)
+        extractor.eval()
+        extractor.to(device)
 
         self.device = device
         self.attribute = attribute
+
         if autocast_dtype is None or device == 'cpu':
             self.autocast = TorchAutocast(enabled=False)
             logger.warning("CLIPEmbeddingConditioner has no autocast, this might lead to NaN.")
@@ -1093,11 +1120,15 @@ class CLIPEmbeddingConditioner(JointEmbeddingConditioner):
             logger.info(f"CLIPEmbeddingConditioner will be evaluated with autocast as {autocast_dtype}.")
             self.autocast = TorchAutocast(enabled=True, device_type=self.device, dtype=dtype)
 
+        if (reduce and model_type == "syno"):
+            logger.warn(f"Conditioner will ignore the 'reduce' configuration since the model type is '{model_type}'")
+
         self.model_arch = model_arch
-        self.preprocess = _transform(visual_model.input_resolution)
+        self.model_type = model_type
+        self.preprocess = _transform(extractor.model.input_resolution)
         self.batch_size = batch_size or 1
         self.normalize = normalize
-        self.__dict__['clip'] = visual_model
+        self.__dict__['clip'] = extractor
         self.reduce = reduce
 
     def _preprocess_frames(self, frames: torch.Tensor) -> torch.Tensor:
@@ -1121,8 +1152,8 @@ class CLIPEmbeddingConditioner(JointEmbeddingConditioner):
 
         return frames
 
-    def _compute_frames_embedding(self, frames: torch.Tensor, reduce_mean: bool = False) -> torch.Tensor:
-        """Compute audio wave embedding from CLAP model.
+    def _compute_frames_embedding(self, clips: torch.Tensor, reduce_mean: bool = False) -> torch.Tensor:
+        """Compute clip frame embeddings from CLIP model.
 
         Since CLAP operates on a fixed sequence length audio inputs and we need to process longer audio sequences,
         we calculate the wav embeddings on `clap_max_frames` windows with `clap_stride`-second stride and
@@ -1136,20 +1167,32 @@ class CLIPEmbeddingConditioner(JointEmbeddingConditioner):
         Returns:
             torch.Tensor: Audio embedding of shape [B, F, D], F being the number of chunks, D the dimension.
         """
-        with torch.no_grad():
-            frames = self._preprocess_frames(frames)
-            B, T, C, H, W = frames.shape
-            frames = einops.rearrange(frames, 'b t c h w -> (b t) c h w')
+        clips = self._preprocess_frames(clips)
+        B, T, C, H, W = clips.shape
+
+        if self.model_type == "origin":
+            # frames = einops.rearrange(frames, 'b t c h w -> (b t) c h w')
+            frames = clips.flatten(0, 1)[:, None]  # shape =(b*t, 1, c, h, w)
             embed_list = []
             for i in range(0, frames.size(0), self.batch_size):
                 _frame = frames[i:i + self.batch_size, ...]
                 _embed = self.clip(_frame)
-                embed_list.append(_embed)
+                embed_list.append(_embed[:, 0])
             embed = torch.cat(embed_list, dim=0)
             embed = einops.rearrange(embed, '(b t) d -> b t d', b=B)
             if reduce_mean:
                 embed = embed.mean(dim=1, keepdim=True)
-            return embed  # [B, F, D] with F=1 if reduce_mean is True
+        elif self.model_type == "syno":
+            embed_list = []
+
+            for i in range(0, clips.size(0), self.batch_size):
+                _clip = clips[i:i + self.batch_size, ...]
+                _embed = self.clip(_clip)
+                embed_list.append(_embed["syno_s"])
+            embed = torch.cat(embed_list, dim=0)
+            embed = embed[:, None]
+
+        return embed  # [B, F, D] with F=1 if reduce_mean is True
 
     def _get_frames_embedding(self, x: JointEmbedCondition) -> torch.Tensor:
         """Get CLAP embedding from a batch of audio tensors (and corresponding sample rates)."""
