@@ -1082,7 +1082,6 @@ class CLIPEmbeddingConditioner(JointEmbeddingConditioner):
         visual_model.eval()
         visual_model.to(device)
 
-        super(JointEmbeddingConditioner, self).__init__(dim=dim, output_dim=output_dim)
         self.device = device
         self.attribute = attribute
         if autocast_dtype is None or device == 'cpu':
@@ -1154,24 +1153,23 @@ class CLIPEmbeddingConditioner(JointEmbeddingConditioner):
 
     def _get_frames_embedding(self, x: JointEmbedCondition) -> torch.Tensor:
         """Get CLAP embedding from a batch of audio tensors (and corresponding sample rates)."""
+        mask = torch.LongTensor([i for i, v in enumerate(x.frames) if v.sum().item() == 0])
         embed = self._compute_frames_embedding(x.frames, reduce_mean=self.reduce)
         if self.normalize:
             embed = torch.nn.functional.normalize(embed, p=2.0, dim=-1)
-        return embed
+        return embed, mask
 
     def _get_embed(self, x: JointEmbedCondition) -> tp.Tuple[torch.Tensor, torch.Tensor]:
         """Extract latent representation from CLIP."""
 
-        embed = self._get_frames_embedding(x)
-        empty_idx = torch.LongTensor([])  # we assume we always have the audio wav
+        embed, empty_idx = self._get_frames_embedding(x)
 
         return embed, empty_idx
 
     def forward(self, x: JointEmbedCondition) -> ConditionType:
         with self.autocast:
             embed, empty_idx = self._get_embed(x)
-            out_embed = embed
-            out_embed = self.output_proj(out_embed)
+            out_embed = self.output_proj(embed)
             mask = torch.ones(*out_embed.shape[:2], device=out_embed.device)
             mask[empty_idx, :] = 0  # zero-out index where the input is non-existant
             out_embed = (out_embed * mask.unsqueeze(-1))
