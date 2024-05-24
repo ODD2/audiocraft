@@ -86,6 +86,7 @@ class SampleManager:
             to do the mapping (at the cost of potentially dumping duplicate prompts/references
             depending on the task).
     """
+
     def __init__(self, xp: dora.XP, map_reference_to_sample_id: bool = False):
         self.xp = xp
         self.base_folder: Path = xp.folder / xp.cfg.generate.path
@@ -160,8 +161,12 @@ class SampleManager:
         if conditions:
             encoded_json = json.dumps(conditions, sort_keys=True).encode()
             hash_id.update(encoded_json)
-            cond_str = "-".join([f"{key}={slugify(value)}"
-                                 for key, value in sorted(conditions.items())])
+            cond_str = "-".join(
+                [
+                    f"{key}={slugify(value)}"
+                    for key, value in sorted(conditions.items())
+                ]
+            )
             cond_str = cond_str[:100]  # some raw text might be too long to be a valid filename
             cond_str = cond_str if len(cond_str) > 0 else "unconditioned"
             hr_label += f"_{cond_str}"

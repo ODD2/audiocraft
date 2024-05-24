@@ -8,6 +8,7 @@ from pathlib import Path
 import time
 import typing as tp
 import warnings
+import hashlib
 
 import flashy
 import math
@@ -538,7 +539,12 @@ class MusicGenSolver(base.StandardSolver):
                         elif isinstance(cond_val, WavCondition):
                             cond_dict[cond_key] = cond_val.path
                         elif isinstance(cond_val, JointEmbedCondition):
-                            cond_dict[cond_key] = cond_val.text  # only support text at inference for now
+                            # only support text at inference for now
+                            cond_dict[cond_key] = dict(
+                                text=cond_val.text,
+                                wav=hashlib.sha1(cond_val.wav.contiguous().numpy().data).hexdigest(),
+                                frames=hashlib.sha1(cond_val.frames.contiguous().numpy().data).hexdigest()
+                            )
                         else:
                             # if we reached this point, it is not clear how to log the condition
                             # so we just log the type.
@@ -573,7 +579,8 @@ class MusicGenSolver(base.StandardSolver):
                     rtf.append(gen_unprompted_outputs['rtf'])
                 sample_manager.add_samples(
                     gen_unprompted_audio, self.epoch, hydrated_conditions,
-                    ground_truth_wavs=audio, generation_args=sample_generation_params)
+                    ground_truth_wavs=audio, generation_args=sample_generation_params
+                )
 
             if self.cfg.generate.lm.prompted_samples:
                 gen_outputs = self.run_generate_step(
@@ -587,7 +594,7 @@ class MusicGenSolver(base.StandardSolver):
                     generation_args=sample_generation_params)
                 rtf.append(gen_outputs["rtf"])
 
-            metrics['rtf'] = sum(rtf)/min(len(rtf),1)
+            metrics['rtf'] = sum(rtf) / min(len(rtf), 1)
             metrics = average(metrics)
 
         flashy.distrib.barrier()

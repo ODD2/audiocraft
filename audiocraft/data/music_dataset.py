@@ -240,7 +240,8 @@ class MusicDataset(InfoAudioDataset):
                 music_info.description = self.paraphraser.sample(music_info.meta.path, music_info.description)
             if self.merge_text_p:
                 music_info = augment_music_info_description(
-                    music_info, self.merge_text_p, self.drop_desc_p, self.drop_other_p)
+                    music_info, self.merge_text_p, self.drop_desc_p, self.drop_other_p
+                )
         else:
             music_info = MusicInfo.from_dict(info_data, fields_required=False)
 
