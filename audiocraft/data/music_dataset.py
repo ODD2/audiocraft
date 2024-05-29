@@ -209,7 +209,8 @@ class MusicDataset(InfoAudioDataset):
                  merge_text_p: float = 0., drop_desc_p: float = 0., drop_other_p: float = 0.,
                  joint_embed_attributes: tp.List[str] = [],
                  paraphrase_source: tp.Optional[str] = None, paraphrase_p: float = 0,
-                 **kwargs):
+                 n_frames: int = 10,
+                 ** kwargs):
         kwargs['return_info'] = True  # We require the info for each song of the dataset.
         super().__init__(*args, **kwargs)
         self.info_fields_required = info_fields_required
@@ -218,6 +219,7 @@ class MusicDataset(InfoAudioDataset):
         self.drop_other_p = drop_other_p
         self.joint_embed_attributes = joint_embed_attributes
         self.paraphraser = None
+        self.n_frames = n_frames
         self.frame_transform = Compose([
             Resize((380, 380), interpolation=InterpolationMode.BICUBIC, antialias=True)
         ])
@@ -251,7 +253,7 @@ class MusicDataset(InfoAudioDataset):
                 duration=info.n_frames / info.sample_rate,
                 offset=info.seek_time,
                 transform=self.frame_transform,
-                num_frames=10
+                num_frames=self.n_frames
             )
 
         music_info.self_wav = WavCondition(

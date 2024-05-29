@@ -1056,32 +1056,6 @@ class CLIPEmbeddingConditioner(JointEmbeddingConditioner):
         except ImportError:
             raise ImportError("Please install CLIP to use the CLIPEmbeddingConditioner")
 
-        if model_type == "origin":
-            try:
-                import vclip  # type: ignore
-                from PIL import Image
-                from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, InterpolationMode
-                BICUBIC = InterpolationMode.BICUBIC
-            except ImportError:
-                raise ImportError("Please install CLIP to use the CLIPEmbeddingConditioner")
-
-            clip_model, _ = vclip.load(model_arch, device="cpu")
-            extractor = clip_model.visual.float()
-            extractor.requires_grad_(False)
-
-        elif model_type == "syno":
-            from od.svl import SynoVideoAttrExtractor, OpMode
-
-            extractor = SynoVideoAttrExtractor(
-                architecture=model_arch,
-                text_embed=True,
-                op_mode=OpMode.S,
-                s_v_attr="k"
-            )
-            self._decoder = extractor.decoder
-            extractor.requires_grad_(False)
-            extractor.decoder.requires_grad_(True)
-
         def _convert_image_to_rgb(image):
             if (isinstance(image, Image.Image)):
                 return image.convert("RGB")
@@ -1098,12 +1072,41 @@ class CLIPEmbeddingConditioner(JointEmbeddingConditioner):
 
         def _transform(n_px):
             return Compose([
-                Resize(n_px, interpolation=BICUBIC, antialias=True),
-                CenterCrop(n_px),
+                Resize((n_px, n_px), interpolation=BICUBIC, antialias=True),
                 _convert_image_to_rgb,
                 _to_tensor,
                 Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),
             ])
+
+        if model_type == "origin":
+            try:
+                import vclip  # type: ignore
+                from PIL import Image
+                from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, InterpolationMode
+                BICUBIC = InterpolationMode.BICUBIC
+            except ImportError:
+                raise ImportError("Please install CLIP to use the CLIPEmbeddingConditioner")
+
+            clip_model, _ = vclip.load(model_arch, device="cpu")
+            extractor = clip_model.visual.float()
+            extractor.requires_grad_(False)
+
+            self.preprocess = _transform(extractor.input_resolution)
+
+        elif model_type == "syno":
+            from od.svl import SynoVideoAttrExtractor, OpMode
+
+            extractor = SynoVideoAttrExtractor(
+                architecture=model_arch,
+                text_embed=True,
+                op_mode=OpMode.S,
+                s_v_attr="k"
+            )
+            self._decoder = extractor.decoder
+            extractor.requires_grad_(False)
+            extractor.decoder.requires_grad_(True)
+
+            self.preprocess = _transform(extractor.model.input_resolution)
 
         extractor.eval()
         extractor.to(device)
@@ -1125,7 +1128,7 @@ class CLIPEmbeddingConditioner(JointEmbeddingConditioner):
 
         self.model_arch = model_arch
         self.model_type = model_type
-        self.preprocess = _transform(extractor.model.input_resolution)
+
         self.batch_size = batch_size or 1
         self.normalize = normalize
         self.__dict__['clip'] = extractor
