@@ -366,7 +366,9 @@ class MusicGenSolver(base.StandardSolver):
         check_synchronization_points = idx == 1 and self.device == 'cuda'
 
         condition_tensors, audio_tokens, padding_mask = self._prepare_tokens_and_attributes(
-            batch, check_synchronization_points)
+            batch,
+            check_synchronization_points
+        )
 
         self.deadlock_detect.update('tokens_and_conditions')
 

@@ -413,7 +413,8 @@ class StreamingMultiheadAttention(StreamingModule):
                 p = self.dropout if self.training else 0
                 if _efficient_attention_backend == 'torch':
                     x = torch.nn.functional.scaled_dot_product_attention(
-                        q, k, v, is_causal=attn_mask is not None, dropout_p=p)
+                        q, k, v, is_causal=attn_mask is not None, dropout_p=p
+                    )
                 else:
                     x = ops.memory_efficient_attention(q, k, v, attn_mask, p=p)
             else:
@@ -560,11 +561,14 @@ class StreamingTransformerLayer(nn.TransformerEncoderLayer):
         x = src
         if self.norm_first:
             x = x + self.layer_scale_1(
-                self._sa_block(self.norm1(x), src_mask, src_key_padding_mask))
+                self._sa_block(self.norm1(x), src_mask, src_key_padding_mask)
+            )
             if cross_attention_src is not None:
                 x = x + self.layer_scale_cross(
                     self._cross_attention_block(
-                        self.norm_cross(x), cross_attention_src))
+                        self.norm_cross(x), cross_attention_src
+                    )
+                )
             x = x + self.layer_scale_2(self._ff_block(self.norm2(x)))
         else:
             x = self.norm1(x + self.layer_scale_1(

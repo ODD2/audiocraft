@@ -1099,8 +1099,8 @@ class CLIPEmbeddingConditioner(JointEmbeddingConditioner):
             extractor = SynoVideoAttrExtractor(
                 architecture=model_arch,
                 text_embed=True,
-                op_mode=OpMode.S,
-                s_v_attr="k"
+                s_v_attr="k",
+                **kwargs["syno"]
             )
             self._decoder = extractor.decoder
             extractor.requires_grad_(False)
@@ -1185,15 +1185,14 @@ class CLIPEmbeddingConditioner(JointEmbeddingConditioner):
             embed = einops.rearrange(embed, '(b t) d -> b t d', b=B)
             if reduce_mean:
                 embed = embed.mean(dim=1, keepdim=True)
+
         elif self.model_type == "syno":
             embed_list = []
-
             for i in range(0, clips.size(0), self.batch_size):
                 _clip = clips[i:i + self.batch_size, ...]
                 _embed = self.clip(_clip)
-                embed_list.append(_embed["syno_s"])
+                embed_list.append(_embed)
             embed = torch.cat(embed_list, dim=0)
-            embed = embed[:, None]
 
         return embed  # [B, F, D] with F=1 if reduce_mean is True
 
@@ -1201,8 +1200,6 @@ class CLIPEmbeddingConditioner(JointEmbeddingConditioner):
         """Get CLAP embedding from a batch of audio tensors (and corresponding sample rates)."""
         mask = torch.LongTensor([i for i, v in enumerate(x.frames) if v.sum().item() == 0])
         embed = self._compute_frames_embedding(x.frames, reduce_mean=self.reduce)
-        if self.normalize:
-            embed = torch.nn.functional.normalize(embed, p=2.0, dim=-1)
         return embed, mask
 
     def _get_embed(self, x: JointEmbedCondition) -> tp.Tuple[torch.Tensor, torch.Tensor]:
@@ -1216,8 +1213,13 @@ class CLIPEmbeddingConditioner(JointEmbeddingConditioner):
         with self.autocast:
             embed, empty_idx = self._get_embed(x)
             out_embed = self.output_proj(embed)
+
+            if self.normalize:
+                out_embed = torch.nn.functional.normalize(out_embed, p=2.0, dim=-1)
+
             mask = torch.ones(*out_embed.shape[:2], device=out_embed.device)
             mask[empty_idx, :] = 0  # zero-out index where the input is non-existant
+
             out_embed = (out_embed * mask.unsqueeze(-1))
             return out_embed, mask
 
@@ -1641,7 +1643,9 @@ class ConditionFuser(StreamingModule):
                 cross_attention_output.shape[1],
                 device=cross_attention_output.device
             ).view(1, -1, 1)
-            pos_emb = create_sin_embedding(positions, cross_attention_output.shape[-1])
+            # added this to prevent classifier free guidance interrupted by positional embeddings
+            mask = ~(cross_attention_output.mean(dim=-1, keepdim=True) == 0)
+            pos_emb = create_sin_embedding(positions, cross_attention_output.shape[-1]).repeat(B, 1, 1) * mask
             cross_attention_output = cross_attention_output + self.cross_attention_pos_emb_scale * pos_emb
 
         if self._is_streaming:
