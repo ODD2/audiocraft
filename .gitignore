@@ -60,3 +60,11 @@ dataset/*
 /notebooks
 /local_scripts
 /notes
+/frame_out
+clip/
+logs/
+checkpoints/
+samples/
+tensorflow_models/
+*.wav
+*.pt

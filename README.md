@@ -1,87 +1,91 @@
-# AudioCraft
-![docs badge](https://github.com/facebookresearch/audiocraft/workflows/audiocraft_docs/badge.svg)
-![linter badge](https://github.com/facebookresearch/audiocraft/workflows/audiocraft_linter/badge.svg)
-![tests badge](https://github.com/facebookresearch/audiocraft/workflows/audiocraft_tests/badge.svg)
+# AudioCraft Varient For Image to Music Generation
+We extend the MusicGen project, a text-to-music generation framework, for extra modality controlling like music and video.
+In this page, we'll provide several helpful instructions/tools to speed up the preparation to work under this framework, if further instructions are required (e.g. installation and data preparation) please refer to the original documents located in the [docs](./docs/) folder, starting with this [page](./docs/AUDIOCRAFT.md).
 
-AudioCraft is a PyTorch library for deep learning research on audio generation. AudioCraft contains inference and training code
-for two state-of-the-art AI generative models producing high-quality audio: AudioGen and MusicGen.
-
-
-## Installation
-AudioCraft requires Python 3.9, PyTorch 2.1.0. To install AudioCraft, you can run the following:
-
-```shell
-# Best to make sure you have torch installed first, in particular before installing xformers.
-# Don't run this if you already have PyTorch installed.
-python -m pip install 'torch==2.1.0'
-# You might need the following before trying to install the packages
-python -m pip install setuptools wheel
-# Then proceed to one of the following
-python -m pip install -U audiocraft  # stable release
-python -m pip install -U git+https://git@github.com/facebookresearch/audiocraft#egg=audiocraft  # bleeding edge
-python -m pip install -e .  # or if you cloned the repo locally (mandatory if you want to train).
+## Major Configuration Files
+```yaml
+   config/config.yaml: gpu and vram configuration (?).
+   config/teams/default.yaml: global folder localization.
+   config/solver/musicgen/default.yaml: setup for evalution metric environments, and dataset sample size.
+   config/solver/musicgen/musicgen_base_32khz.yaml: major training setup file, configures the batch size and workers of the dataloader,the generation phase interval, the evaluation phase interval and metrics to use, the optimizer, the logging period, the checkpoint setup...
+   config/conditioner/clipemb2music.yaml: musicgen conditioner configuration, also controls the cross attention positional encoding and the classifier free guidance.
+   config/dset/audio/ytcharts.yaml: music dataset configuration.
+   
 ```
+## Major Source Files
+```yaml
+	audiocraft/data/music_dataset.py: modify code for the video music dataloader 
+	audiocraft/models/builders.py: modify code to use specific conditioner.
+	audiocraft/models/musicgen.py: configure inference interface for the new video/music conditioner.
+	audiocraft/modules/conditioners.py: create new conditioners here.
+	audiocraft/modules/transformers.py: transformer modules here, currently remains unaltered.
+	audiocraft/solvers/musicgne.py:  training specific model layers after initialization.
+	audiocraft/utils/samples.py: control the namings of the generated samples here.
+   
+```
+## FID Evaluation
+The FID evaluation is processed by google's FID project under a dedicated environment, which requires extra setup to make this function work properly.
 
-We also recommend having `ffmpeg` installed, either through your system or Anaconda:
+### Environment Installation 
+Please refer and ***run only the first step*** of the installation [guidelines](https://github.com/facebookresearch/audiocraft/blob/main/audiocraft/metrics/fad.py), the second step has been completed and included in this project.
+
+### Environment Configuration for Evaluation 
+configure the following environment variables and re-activate the environment.
 ```bash
-sudo apt-get install ffmpeg
-# Or if you are using Anaconda or Miniconda
-conda install "ffmpeg<5" -c conda-forge
+TF_PYTHON_EXE = /home/od/miniconda3/envs/fad/bin/python # use 'which python' to determine
+TF_LIBRARY_PATH = /home/od/miniconda3/envs/fad/lib/python3.9/site-packages/nvidia/cudnn/lib # similarly locate the nvidia cudnn library after located in the conda environment.
+TF_FORCE_GPU_ALLOW_GROWTH = true
 ```
 
-## Models
+## Main Workflow
+Basically, we repeat the following pipeline to train and evaluate the generated samples.
+```bash
+# run 
+dora run -d \
+	solver=musicgen/musicgen_base_32khz `# base config file`\
+	model/lm/model_scale=small `# the scale of musicgen model, in [small,medium,large]`\
+	continue_from=/scratch4/users/od/repos/audiocraft/small_syno_L14_30F.pt `# the checkpoint modified for custom conditioner`\
+	conditioner=clipemb2music `# the conditioner config file`\
+	dset=audio/ytcharts  `# the dataset to train & evaluate on`
 
-At the moment, AudioCraft contains the training code and inference code for:
-* [MusicGen](./docs/MUSICGEN.md): A state-of-the-art controllable text-to-music model.
-* [AudioGen](./docs/AUDIOGEN.md): A state-of-the-art text-to-sound model.
-* [EnCodec](./docs/ENCODEC.md): A state-of-the-art high fidelity neural audio codec.
-* [Multi Band Diffusion](./docs/MBD.md): An EnCodec compatible decoder using diffusion.
-* [MAGNeT](./docs/MAGNET.md): A state-of-the-art non-autoregressive model for text-to-music and text-to-sound.
+# Now, after training, the model checkpoints should locate at 'logs/xps/2e5708a4/', we need to transform the checkpoint into an dedicated model weight for inference. Configure and run the od/export.py script to export the model. The exported weights will be saved at './checkpoints'. 
+python -m od.export
 
-## Training code
-
-AudioCraft contains PyTorch components for deep learning research in audio and training pipelines for the developed models.
-For a general introduction of AudioCraft design principles and instructions to develop your own training pipeline, refer to
-the [AudioCraft training documentation](./docs/TRAINING.md).
-
-For reproducing existing work and using the developed training pipelines, refer to the instructions for each specific model
-that provides pointers to configuration, example grids and model/task-specific information and FAQ.
-
-
-## API documentation
-
-We provide some [API documentation](https://facebookresearch.github.io/audiocraft/api_docs/audiocraft/index.html) for AudioCraft.
-
-
-## FAQ
-
-#### Is the training code available?
-
-Yes! We provide the training code for [EnCodec](./docs/ENCODEC.md), [MusicGen](./docs/MUSICGEN.md) and [Multi Band Diffusion](./docs/MBD.md).
-
-#### Where are the models stored?
-
-Hugging Face stored the model in a specific location, which can be overridden by setting the `AUDIOCRAFT_CACHE_DIR` environment variable for the AudioCraft models.
-In order to change the cache location of the other Hugging Face models, please check out the [Hugging Face Transformers documentation for the cache setup](https://huggingface.co/docs/transformers/installation#cache-setup).
-Finally, if you use a model that relies on Demucs (e.g. `musicgen-melody`) and want to change the download location for Demucs, refer to the [Torch Hub documentation](https://pytorch.org/docs/stable/hub.html#where-are-my-downloaded-models-saved).
-
-
-## License
-* The code in this repository is released under the MIT license as found in the [LICENSE file](LICENSE).
-* The models weights in this repository are released under the CC-BY-NC 4.0 license as found in the [LICENSE_weights file](LICENSE_weights).
-
-
-## Citation
-
-For the general framework of AudioCraft, please cite the following.
-```
-@inproceedings{copet2023simple,
-    title={Simple and Controllable Music Generation},
-    author={Jade Copet and Felix Kreuk and Itai Gat and Tal Remez and David Kant and Gabriel Synnaeve and Yossi Adi and Alexandre Défossez},
-    booktitle={Thirty-seventh Conference on Neural Information Processing Systems},
-    year={2023},
-}
+# Setup the generation script (e.g. od/clip.py) to create videos with generated music.
+pyhton -m od.clip `# The samples are located at 'samples/0601_120000/*.mp4'`
 ```
 
-When referring to a specific model, please cite as mentioned in the model specific README, e.g
-[./docs/MUSICGEN.md](./docs/MUSICGEN.md), [./docs/AUDIOGEN.md](./docs/AUDIOGEN.md), etc.
+## Several Helpful Instructions
+```bash
+# If the conditioner has different feature size than the default musicgen model, we need to re-create a checkpoint for the new feature size. Use od/make_ckpt.py to do the work.
+python -m od.make_ckpt `# This will create a checkpoint in the root folder`
+```
+```bash
+# The structure of the dataset folder is:
+./dataset - ytcharts/ - {test/, train/} - {ytid.mp3, ytid.mp4, ytid.json}
+```
+```bash
+# To create the egs for dataset config file.
+python -m audiocraft.data.audio_dataset dataset/ytcharts/train egs/ytcharts/train.jsonl
+python -m audiocraft.data.audio_dataset dataset/ytcharts/test egs/ytcharts/test.jsonl
+```
+```bash
+# Run tensorboard to visualize the training process
+tensorboard --logdir=logs/xps/2e5708a4/tensorboard
+```
+```bash
+# Locate the generated samples in the samples folder
+cd logs/xps/2e5708a4/samples
+```
+```bash
+# Download VGGISH checkpoint to logs/fad/
+curl -o data/vggish_model.ckpt https://storage.googleapis.com/audioset/vggish_model.ckpt
+```
+```bash
+# Download VGGISH checkpoint to logs/fad/
+curl -o data/vggish_model.ckpt https://storage.googleapis.com/audioset/vggish_model.ckpt
+```
+```bash
+# Download CLAP checkpoint to logs/calp/
+curl -o https://huggingface.co/lukewys/laion_clap/resolve/main/music_audioset_epoch_15_esc_90.14.pt
+```
