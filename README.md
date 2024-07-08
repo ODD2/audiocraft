@@ -19,8 +19,8 @@ In this page, we'll provide several helpful instructions/tools to speed up the p
 	audiocraft/models/musicgen.py: configure inference interface for the new video/music conditioner.
 	audiocraft/modules/conditioners.py: create new conditioners here.
 	audiocraft/modules/transformers.py: transformer modules here, currently remains unaltered.
-	audiocraft/solvers/musicgne.py:  training specific model layers after initialization.
-	audiocraft/utils/samples.py: control the namings of the generated samples here.
+	audiocraft/solvers/musicgen.py:  training specific model layers after initialization.
+	audiocraft/utils/samples/manager.py: control the namings of the generated samples here.
    
 ```
 ## FID Evaluation
@@ -32,6 +32,7 @@ Please refer and ***run only the first step*** of the installation [guidelines](
 ### Environment Configuration for Evaluation 
 configure the following environment variables and re-activate the environment.
 ```bash
+# refer to: conda env config vars set XXX=XXX
 TF_PYTHON_EXE = /home/od/miniconda3/envs/fad/bin/python # use 'which python' to determine
 TF_LIBRARY_PATH = /home/od/miniconda3/envs/fad/lib/python3.9/site-packages/nvidia/cudnn/lib # similarly locate the nvidia cudnn library after located in the conda environment.
 TF_FORCE_GPU_ALLOW_GROWTH = true
@@ -82,10 +83,6 @@ cd logs/xps/2e5708a4/samples
 curl -o data/vggish_model.ckpt https://storage.googleapis.com/audioset/vggish_model.ckpt
 ```
 ```bash
-# Download VGGISH checkpoint to logs/fad/
-curl -o data/vggish_model.ckpt https://storage.googleapis.com/audioset/vggish_model.ckpt
-```
-```bash
-# Download CLAP checkpoint to logs/calp/
+# Download CLAP checkpoint to logs/clap/
 curl -o https://huggingface.co/lukewys/laion_clap/resolve/main/music_audioset_epoch_15_esc_90.14.pt
 ```

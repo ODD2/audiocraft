@@ -9,17 +9,17 @@ sd = model.lm.state_dict()
 device = list(sd.values())[0].device
 
 # modify weights here
-from od.svl import SynoVideoAttrExtractor, OpMode
-syno = SynoVideoAttrExtractor("ViT-L/14", False, op_mode=OpMode.S | OpMode.T, num_frames=30)
-sd = {
-    **{
-        f"condition_provider.conditioners.description._decoder.{k}": v.to(device)
-        for k, v in syno.decoder.named_parameters()
-    },
-    **sd
-}
+# from od.svl import SynoVideoAttrExtractor, OpMode
+# syno = SynoVideoAttrExtractor("ViT-L/14", False, op_mode=OpMode.S | OpMode.T, num_frames=30)
+# sd = {
+#     **{
+#         f"condition_provider.conditioners.description._decoder.{k}": v.to(device)
+#         for k, v in syno.decoder.named_parameters()
+#     },
+#     **sd
+# }
 # small
-sd['condition_provider.conditioners.description.output_proj.weight'] = torch.zeros((1024, 1024), device=device)
+sd['condition_provider.conditioners.description.output_proj.weight'] = torch.zeros((768, 1024), device=device)
 sd['condition_provider.conditioners.description.output_proj.bias'] = torch.zeros((1024), device=device)
 # # medium
 # sd['condition_provider.conditioners.description.output_proj.weight'] = torch.zeros((1536, 1024), device=device)
