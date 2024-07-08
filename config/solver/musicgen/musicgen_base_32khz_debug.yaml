@@ -22,24 +22,33 @@ channels: 1
 sample_rate: 32000
 
 deadlock:
-  use: true  # deadlock detection
+  use: false  # deadlock detection
 
 dataset:
-  batch_size: 64
-  num_workers: 1
+  batch_size:  1  # 32 GPUs
+  num_workers: 0
+  # segment_duration: 10
   sample_on_weight: false  # Uniform sampling all the way
   sample_on_duration: false  # Uniform sampling all the way
+  train:
+    num_samples: 10 # need a randomly large number here for AudioDataset
+  valid:
+    num_samples: 3
+  generate:
+    num_samples: 3
+  evaluate:
+    num_samples: 3
 
 generate:
-  every: 3
+  every: 1
   lm:
     use_sampling: true
     top_k: 250
     top_p: 0.0
 
 evaluate:
-  every: 10
-  num_workers: 2
+  every: 1
+  num_workers: 5
   metrics:
     base: true
     fad: true
@@ -47,10 +56,8 @@ evaluate:
     text_consistency: false
     chroma_cosine: false
 
-
 # optim:
-#   epochs: 100
-#   updates_per_epoch: 100
+#   epochs: 500
 #   optimizer: dadam
 #   lr: 1
 #   ema:
@@ -58,33 +65,35 @@ evaluate:
 #     updates: 10
 #     device: cuda
 
+
 optim:
   epochs: 100
-  updates_per_epoch: 25
+  updates_per_epoch: 5
   lr: 5e-5
   optimizer: adamw
   max_norm: 1.0
   eager_sync: true
   adam:
-    betas: [0.9, 0.95]
+    betas: [0.9, 0.99]
     weight_decay: 0.1
     eps: 1e-8
   ema:
     use: true
     updates: 10
-    device: cpu
+    device: cuda
 
 logging:
   log_tensorboard: true
-  log_updates: 10
-
-
-checkpoint:
-  save_every: 5
+  log_updates: 10000000
 
 # schedule:
 #   lr_scheduler: cosine
 #   cosine:
-#     warmup: 500
+#     warmup: 4000
 #     lr_min_ratio: 0.0
 #     cycle_length: 1.0
+
+
+od:
+  match_req_grad: ["condition_provider"]
+  # match_req_grad: ["condition_provider", "transformer", "out_norm", "linears","emb"]

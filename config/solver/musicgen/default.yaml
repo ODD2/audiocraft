@@ -4,7 +4,6 @@ defaults:
   - /solver/default
   - /conditioner: none
   - _self_
-  - /solver/musicgen/evaluation: none
   - override /dset: audio/default
 
 autocast: true
@@ -44,16 +43,18 @@ dataset:
   train:
     num_samples: 1000000 # need a randomly large number here for AudioDataset
   valid:
-    num_samples: 10000
+    num_samples: 100
   generate:
-    num_samples: 50
+    num_samples: 10
+  evaluate:
+    num_samples: 100
 
 metrics:
   fad:
     use_gt: false
     model: tf
     tf:
-      bin: null  # path to local frechet_audio_distance code
+      bin: /scratch4/users/od/repos/audiocraft  # path to local frechet_audio_distance code
       model_path: //reference/fad/vggish_model.ckpt
   kld:
     use_gt: false
@@ -86,8 +87,8 @@ generate:
     sample_rate: ${sample_rate}
     loudness_headroom_db: 14
   lm:
-    prompted_samples: true
-    unprompted_samples: true
+    prompted_samples: false #TODO: resume with true
+    unprompted_samples: true #TODO: resume with true
     gen_gt_samples: false
     prompt_duration: null   # if not set, will use dataset.generate.segment_duration / 4
     gen_duration: null      # if not set, will use dataset.generate.segment_duration
@@ -97,6 +98,7 @@ generate:
     temp: 1.0
     top_k: 0
     top_p: 0.0
+
 evaluate:
   every: 25
   num_workers: 5

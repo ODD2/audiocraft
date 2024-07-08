@@ -1,0 +1,50 @@
+# @package __global__
+
+od:
+  # match_req_grad: ["condition_provider"]
+  # match_req_grad: ["condition_provider","cross_attention"]
+  match_req_grad: ["condition_provider", "transformer", "out_norm", "linears","emb"]  # full
+
+classifier_free_guidance:
+  training_dropout: 0.3
+  inference_coef: 3.0
+
+attribute_dropout:
+  text: {}
+  wav: {}
+
+fuser:
+  cross_attention_pos_emb: false
+  cross_attention_pos_emb_scale: 0.1
+  sum: []
+  prepend: []
+  cross: [description]
+  input_interpolate: []
+
+conditioners:
+  description:
+    model: clip
+    clip:
+      model_arch: 'ViT-B/32'
+      dim: 512
+      attribute: description
+      normalize: true
+      reduce: false
+
+      # syno-version conditioner
+      # model_arch: 'ViT-L/14'
+      # dim: 1024
+      # attribute: description
+      # normalize: true
+      # model_type: "syno"
+      # syno: 
+      #   num_frames: 30
+      #   op_mode: ["S","T"]
+
+dataset:
+  joint_embed_attributes: [description]
+  n_frames: 30
+  # train:
+  #   merge_text_p: 0.25
+  #   drop_desc_p: 0.5
+  #   drop_other_p: 0.5

@@ -1,0 +1,12 @@
+# @package __global__
+
+# total samples obtained from MusicCaps = 5469
+# (out of 5521 due to AudioSet corrupted samples)
+datasource:
+  max_sample_rate: 44100
+  max_channels: 2
+
+  train: egs/ytcharts/train  
+  valid: egs/ytcharts/test  
+  evaluate: egs/ytcharts/test
+  generate: egs/ytcharts/test # identical to evaluate
