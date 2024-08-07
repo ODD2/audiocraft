@@ -814,8 +814,8 @@ class CLAPEmbeddingConditioner(JointEmbeddingConditioner):
         warnings.warn("Sample rate for CLAP conditioner was fixed in version v1.1.0, (from 44.1 to 48 kHz). "
                       "Please retrain all models.")
         checkpoint = AudioCraftEnvironment.resolve_reference_path(checkpoint)
-        clap_tokenize = RobertaTokenizer.from_pretrained('roberta-base')
-        clap_model = laion_clap.CLAP_Module(enable_fusion=enable_fusion, amodel=model_arch)
+        clap_tokenize = RobertaTokenizer.from_pretrained('roberta-base', device_map="cpu")
+        clap_model = laion_clap.CLAP_Module(enable_fusion=enable_fusion, amodel=model_arch, device="cpu")
         load_clap_state_dict(clap_model, checkpoint)
         clap_model.eval()
         clap_model.to(device)

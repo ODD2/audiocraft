@@ -1,5 +1,9 @@
 # @package __global__
 
+od:
+  # match_req_grad: ["condition_provider"]
+  # match_req_grad: ["condition_provider","cross_attention"]
+  match_req_grad: ["condition_provider", "transformer", "out_norm", "linears","emb"]  # full
 classifier_free_guidance:
   training_dropout: 0.3
   inference_coef: 3.0
@@ -10,7 +14,7 @@ attribute_dropout:
 
 fuser:
   cross_attention_pos_emb: false
-  cross_attention_pos_emb_scale: 1
+  cross_attention_pos_emb_scale: 0.1
   sum: []
   prepend: []
   cross: [description]
@@ -38,7 +42,4 @@ conditioners:
 
 dataset:
   joint_embed_attributes: [description]
-  train:
-    merge_text_p: 0.25
-    drop_desc_p: 0.5
-    drop_other_p: 0.5
+  n_frames: 0

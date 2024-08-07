@@ -247,7 +247,7 @@ class MusicDataset(InfoAudioDataset):
         else:
             music_info = MusicInfo.from_dict(info_data, fields_required=False)
 
-        if Path(music_video_path).exists():
+        if Path(music_video_path).exists() and self.n_frames > 0:
             frames = fetch_frames(
                 video_path=str(music_video_path),
                 duration=info.n_frames / info.sample_rate,
@@ -255,6 +255,8 @@ class MusicDataset(InfoAudioDataset):
                 transform=self.frame_transform,
                 num_frames=self.n_frames
             )
+        else:
+            frames = torch.tensor([0])
 
         music_info.self_wav = WavCondition(
             wav=wav[None], length=torch.tensor([info.n_frames]),
