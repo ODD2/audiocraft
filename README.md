@@ -14,12 +14,12 @@ config/dset/audio/ytcharts.yaml: music dataset configuration.
 ## Major Source Files
 ```yaml
 audiocraft/data/music_dataset.py: modify code for the video music dataloader 
-/models/builders.py: modify code to use specific conditioner.
-/models/musicgen.py: configure inference interface for the new video/music conditioner.
-/modules/conditioners.py: create new conditioners here.
-/modules/transformers.py: transformer modules here, currently remains unaltered.
-/solvers/musicgen.py:  training specific model layers after initialization.
-/utils/samples/manager.py: control the namings of the generated samples here.   
+audiocraft/models/builders.py: modify code to use specific conditioner.
+audiocraft/models/musicgen.py: configure inference interface for the new video/music conditioner.
+audiocraft/modules/conditioners.py: create new conditioners here.
+audiocraft/modules/transformers.py: transformer modules here, currently remains unaltered.
+audiocraft/solvers/musicgen.py:  training specific model layers after initialization.
+audiocraft/utils/samples/manager.py: control the namings of the generated samples here.   
 ```
 ## FAD Evaluation
 The FAD evaluation is processed by google's FAD project under a **seperated environment**, which requires extra setup to make this function work properly.
