@@ -65,6 +65,6 @@ clip/
 logs/
 checkpoints/
 samples/
-tensorflow_models/
 *.wav
 *.pt
+test_dts/
