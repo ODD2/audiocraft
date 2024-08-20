@@ -757,6 +757,7 @@ class JointEmbeddingConditioner(BaseConditioner):
 
     def forward(self, x: JointEmbedCondition) -> ConditionType:
         with self.autocast:
+            B = x.wav.shape[0]
             embed, empty_idx = self._get_embed(x)
             if self.quantizer is not None:
                 embed = embed.view(-1, self.dim, 1)
@@ -764,7 +765,7 @@ class JointEmbeddingConditioner(BaseConditioner):
                 out_embed = q_res.x.view(-1, self.dim)
             else:
                 out_embed = embed
-            out_embed = self.output_proj(out_embed).view(-1, 1, self.output_dim)
+            out_embed = self.output_proj(out_embed).view(B, -1, self.output_dim)
             mask = torch.ones(*out_embed.shape[:2], device=out_embed.device)
             mask[empty_idx, :] = 0  # zero-out index where the input is non-existant
             out_embed = (out_embed * mask.unsqueeze(-1))
@@ -773,6 +774,242 @@ class JointEmbeddingConditioner(BaseConditioner):
     def tokenize(self, x: JointEmbedCondition) -> JointEmbedCondition:
         return x
 
+
+# class CLAPEmbeddingConditioner(JointEmbeddingConditioner):
+#     """Joint Embedding conditioner based on pre-trained CLAP model.
+
+#     This CLAP-based conditioner supports a caching mechanism
+#     over the computed embeddings for faster training.
+
+#     Args:
+#         dim (int): Dimension.
+#         output_dim (int): Output dimension.
+#         device (str): Device.
+#         attribute (str): Attribute used by the conditioner.
+#         quantize (bool): Whether to quantize the CLAP embedding.
+#         n_q (int): Number of residual quantizers (used if quantize is true).
+#         bins (int): Quantizers' codebooks size (used if quantize is true).
+#         checkpoint (str): Path to CLAP checkpoint.
+#         model_arch (str): CLAP model architecture.
+#         enable_fusion (bool): Enable fusion for CLAP model.
+#         sample_rate (int): Sample rate used by CLAP model.
+#         max_audio_length (float): Maximum audio length for CLAP model.
+#         audio_stride (float): Stride to use for getting a CLAP embedding on the full sequence.
+#         normalize (bool): Whether to normalize the CLAP embedding.
+#         text_p (float): Probability of using text representation instead of audio at train time.
+#         batch_size (Optional[int]): Batch size for CLAP embedding computation.
+#         autocast_dtype (str): Autocast for the conditioner.
+#         cache_path (Optional[str]): Path for pre-computed embeddings caching.
+#         kwargs: Additional parameters for residual vector quantizer.
+#     """
+#     def __init__(self, dim: int, output_dim: int, device: str, attribute: str,
+#                  quantize: bool, n_q: int, bins: int, checkpoint: tp.Union[str, Path], model_arch: str,
+#                  enable_fusion: bool, sample_rate: int, max_audio_length: int, audio_stride: int,
+#                  normalize: bool, text_p: bool, batch_size: tp.Optional[int] = None,
+#                  autocast_dtype: tp.Optional[str] = 'float32', cache_path: tp.Optional[str] = None, **kwargs):
+#         try:
+#             import laion_clap  # type: ignore
+#         except ImportError:
+#             raise ImportError("Please install CLAP to use the CLAPEmbeddingConditioner: 'pip install laion_clap'")
+#         warnings.warn("Sample rate for CLAP conditioner was fixed in version v1.1.0, (from 44.1 to 48 kHz). "
+#                       "Please retrain all models.")
+#         checkpoint = AudioCraftEnvironment.resolve_reference_path(checkpoint)
+#         clap_tokenize = RobertaTokenizer.from_pretrained('roberta-base')
+#         clap_model = laion_clap.CLAP_Module(enable_fusion=enable_fusion, amodel=model_arch)
+#         load_clap_state_dict(clap_model, checkpoint)
+#         clap_model.eval()
+#         clap_model.to(device)
+#         super().__init__(dim=dim, output_dim=output_dim, device=device, attribute=attribute,
+#                          autocast_dtype=autocast_dtype, quantize=quantize, n_q=n_q, bins=bins,
+#                          **kwargs)
+#         self.checkpoint = checkpoint
+#         self.enable_fusion = enable_fusion
+#         self.model_arch = model_arch
+#         self.clap: laion_clap.CLAP_Module
+#         self.clap_tokenize: RobertaTokenizer
+#         self.clap_sample_rate = sample_rate
+#         self.clap_max_frames = int(self.clap_sample_rate * max_audio_length)
+#         self.clap_stride = int(self.clap_sample_rate * audio_stride)
+#         self.batch_size = batch_size or 1
+#         self.normalize = normalize
+#         self.text_p = text_p
+#         self.__dict__['clap_tokenize'] = clap_tokenize
+#         self.__dict__['clap'] = clap_model
+#         self.wav_cache, self.text_cache = None, None
+#         if cache_path is not None:
+#             self.wav_cache = EmbeddingCache(Path(cache_path) / 'wav', self.device,
+#                                             compute_embed_fn=self._get_wav_embedding_for_cache,
+#                                             extract_embed_fn=self._extract_wav_embedding_chunk)
+#             self.text_cache = EmbeddingCache(Path(cache_path) / 'text', self.device,
+#                                              compute_embed_fn=self._get_text_embedding_for_cache)
+
+#     def _tokenizer(self, texts: tp.Union[str, tp.List[str]]) -> dict:
+#         # we use the default params from CLAP module here as well
+#         return self.clap_tokenize(texts, padding="max_length", truncation=True, max_length=77, return_tensors="pt")
+
+#     def _compute_text_embedding(self, text: tp.List[str]) -> torch.Tensor:
+#         """Compute text embedding from CLAP model on a given a batch of text.
+
+#         Args:
+#             text (list[str]): List of text for the batch, with B items.
+#         Returns:
+#             torch.Tensor: CLAP embedding derived from text, of shape [B, 1, D], with D the CLAP embedding dimension.
+#         """
+#         with torch.no_grad():
+#             embed = self.clap.get_text_embedding(text, tokenizer=self._tokenizer, use_tensor=True)
+#             return embed.view(embed.size(0), 1, embed.size(-1))
+
+#     def _get_text_embedding_for_cache(self, path: tp.Union[Path, str],
+#                                       x: JointEmbedCondition, idx: int) -> torch.Tensor:
+#         """Get text embedding function for the cache."""
+#         text = x.text[idx]
+#         text = text if text is not None else ""
+#         return self._compute_text_embedding([text])[0]
+
+#     def _preprocess_wav(self, wav: torch.Tensor, length: torch.Tensor, sample_rates: tp.List[int]) -> torch.Tensor:
+#         """Preprocess wav to expected format by CLAP model.
+
+#         Args:
+#             wav (torch.Tensor): Audio wav, of shape [B, C, T].
+#             length (torch.Tensor): Actual length of the audio for each item in the batch, of shape [B].
+#             sample_rates (list[int]): Sample rates for each sample in the batch
+#         Returns:
+#             torch.Tensor: Audio wav of shape [B, T].
+#         """
+#         assert wav.dim() == 3, "Expecting wav to be [B, C, T]"
+#         if sample_rates is not None:
+#             _wav = []
+#             for i, audio in enumerate(wav):
+#                 sr = sample_rates[i]
+#                 audio = convert_audio(audio, from_rate=sr, to_rate=self.clap_sample_rate, to_channels=1)
+#                 _wav.append(audio)
+#             wav = torch.stack(_wav, dim=0)
+#         wav = wav.mean(dim=1)
+#         return wav
+
+#     def _compute_wav_embedding(self, wav: torch.Tensor, length: torch.Tensor,
+#                                sample_rates: tp.List[int], reduce_mean: bool = False) -> torch.Tensor:
+#         """Compute audio wave embedding from CLAP model.
+
+#         Since CLAP operates on a fixed sequence length audio inputs and we need to process longer audio sequences,
+#         we calculate the wav embeddings on `clap_max_frames` windows with `clap_stride`-second stride and
+#         average the resulting embeddings.
+
+#         Args:
+#             wav (torch.Tensor): Audio wav, of shape [B, C, T].
+#             length (torch.Tensor): Actual length of the audio for each item in the batch, of shape [B].
+#             sample_rates (list[int]): Sample rates for each sample in the batch.
+#             reduce_mean (bool): Whether to get the average tensor.
+#         Returns:
+#             torch.Tensor: Audio embedding of shape [B, F, D], F being the number of chunks, D the dimension.
+#         """
+#         with torch.no_grad():
+#             wav = self._preprocess_wav(wav, length, sample_rates)
+#             B, T = wav.shape
+#             if T >= self.clap_max_frames:
+#                 wav = wav.unfold(-1, self.clap_max_frames, self.clap_stride)  # [B, F, T]
+#             else:
+#                 wav = wav.view(-1, 1, T)  # [B, F, T] with F=1
+#             wav = einops.rearrange(wav, 'b f t -> (b f) t')
+#             embed_list = []
+#             for i in range(0, wav.size(0), self.batch_size):
+#                 _wav = wav[i:i+self.batch_size, ...]
+#                 _embed = self.clap.get_audio_embedding_from_data(_wav, use_tensor=True)
+#                 embed_list.append(_embed)
+#             embed = torch.cat(embed_list, dim=0)
+#             embed = einops.rearrange(embed, '(b f) d -> b f d', b=B)
+#             if reduce_mean:
+#                 embed = embed.mean(dim=1, keepdim=True)
+#             return embed  # [B, F, D] with F=1 if reduce_mean is True
+
+#     def _get_wav_embedding_for_cache(self, path: tp.Union[str, Path],
+#                                      x: JointEmbedCondition, idx: int) -> torch.Tensor:
+#         """Compute audio wave embedding for the cache.
+#         The embedding is computed on a given audio read from file.
+
+#         Args:
+#             path (str or Path): Path to the full audio file.
+#         Returns:
+#             torch.Tensor: Single-item tensor of shape [F, D], F being the number of chunks, D the dimension.
+#         """
+#         wav, sr = audio_read(path)  # [C, T]
+#         wav = wav.unsqueeze(0).to(self.device)  # [1, C, T]
+#         wav_len = torch.LongTensor([wav.shape[-1]]).to(self.device)
+#         embed = self._compute_wav_embedding(wav, wav_len, [sr], reduce_mean=False)  # [B, F, D]
+#         return embed.squeeze(0)  # [F, D]
+
+#     def _extract_wav_embedding_chunk(self, full_embed: torch.Tensor, x: JointEmbedCondition, idx: int) -> torch.Tensor:
+#         """Extract the chunk of embedding matching the seek_time and length from the full CLAP audio embedding.
+
+#         Args:
+#             full_embed (torch.Tensor): CLAP embedding computed on the full wave, of shape [F, D].
+#             x (JointEmbedCondition): Joint embedding condition for the full batch.
+#             idx (int): Index considered for the given embedding to extract.
+#         Returns:
+#             torch.Tensor: Wav embedding averaged on sliding window, of shape [1, D].
+#         """
+#         sample_rate = x.sample_rate[idx]
+#         seek_time = x.seek_time[idx]
+#         seek_time = 0. if seek_time is None else seek_time
+#         clap_stride = int(self.clap_stride / self.clap_sample_rate) * sample_rate
+#         end_seek_time = seek_time + self.clap_max_frames / self.clap_sample_rate
+#         start_offset = int(seek_time * sample_rate // clap_stride)
+#         end_offset = int(end_seek_time * sample_rate // clap_stride)
+#         wav_embed = full_embed[start_offset:end_offset, ...]
+#         wav_embed = wav_embed.mean(dim=0, keepdim=True)
+#         return wav_embed.to(self.device)  # [F, D]
+
+#     def _get_text_embedding(self, x: JointEmbedCondition) -> torch.Tensor:
+#         """Get CLAP embedding from a batch of text descriptions."""
+#         no_nullified_cond = x.wav.shape[-1] > 1  # we don't want to read from cache when condition dropout
+#         if self.text_cache is not None and no_nullified_cond:
+#             assert all(p is not None for p in x.path), "Cache requires all JointEmbedCondition paths to be provided"
+#             paths = [Path(p) for p in x.path if p is not None]
+#             embed = self.text_cache.get_embed_from_cache(paths, x)
+#         else:
+#             text = [xi if xi is not None else "" for xi in x.text]
+#             embed = self._compute_text_embedding(text)
+#         if self.normalize:
+#             embed = torch.nn.functional.normalize(embed, p=2.0, dim=-1)
+#         return embed
+
+#     def _get_wav_embedding(self, x: JointEmbedCondition) -> torch.Tensor:
+#         """Get CLAP embedding from a batch of audio tensors (and corresponding sample rates)."""
+#         no_undefined_paths = all(p is not None for p in x.path)
+#         no_nullified_cond = x.wav.shape[-1] > 1  # we don't want to read from cache when condition dropout
+#         if self.wav_cache is not None and no_undefined_paths and no_nullified_cond:
+#             paths = [Path(p) for p in x.path if p is not None]
+#             embed = self.wav_cache.get_embed_from_cache(paths, x)
+#         else:
+#             embed = self._compute_wav_embedding(x.wav, x.length, x.sample_rate, reduce_mean=True)
+#         if self.normalize:
+#             embed = torch.nn.functional.normalize(embed, p=2.0, dim=-1)
+#         return embed
+
+#     def tokenize(self, x: JointEmbedCondition) -> JointEmbedCondition:
+#         # Trying to limit as much as possible sync points when the cache is warm.
+#         no_undefined_paths = all(p is not None for p in x.path)
+#         if self.wav_cache is not None and no_undefined_paths:
+#             assert all([p is not None for p in x.path]), "Cache requires all JointEmbedCondition paths to be provided"
+#             paths = [Path(p) for p in x.path if p is not None]
+#             self.wav_cache.populate_embed_cache(paths, x)
+#         if self.text_cache is not None and no_undefined_paths:
+#             assert all([p is not None for p in x.path]), "Cache requires all JointEmbedCondition paths to be provided"
+#             paths = [Path(p) for p in x.path if p is not None]
+#             self.text_cache.populate_embed_cache(paths, x)
+#         return x
+
+#     def _get_embed(self, x: JointEmbedCondition) -> tp.Tuple[torch.Tensor, torch.Tensor]:
+#         """Extract shared latent representation from either the wav or the text using CLAP."""
+#         # decide whether to use text embedding at train time or not
+#         use_text_embed = random.random() < self.text_p
+#         if self.training and not use_text_embed:
+#             embed = self._get_wav_embedding(x)
+#             empty_idx = torch.LongTensor([])  # we assume we always have the audio wav
+#         else:
+#             embed = self._get_text_embedding(x)
+#             empty_idx = torch.LongTensor([i for i, xi in enumerate(x.text) if xi is None or xi == ""])
+#         return embed, empty_idx
 
 class CLAPEmbeddingConditioner(JointEmbeddingConditioner):
     """Joint Embedding conditioner based on pre-trained CLAP model.
@@ -790,38 +1027,41 @@ class CLAPEmbeddingConditioner(JointEmbeddingConditioner):
         bins (int): Quantizers' codebooks size (used if quantize is true).
         checkpoint (str): Path to CLAP checkpoint.
         model_arch (str): CLAP model architecture.
-        enable_fusion (bool): Enable fusion for CLAP model.
         sample_rate (int): Sample rate used by CLAP model.
         max_audio_length (float): Maximum audio length for CLAP model.
         audio_stride (float): Stride to use for getting a CLAP embedding on the full sequence.
         normalize (bool): Whether to normalize the CLAP embedding.
-        text_p (float): Probability of using text representation instead of audio at train time.
         batch_size (Optional[int]): Batch size for CLAP embedding computation.
         autocast_dtype (str): Autocast for the conditioner.
         cache_path (Optional[str]): Path for pre-computed embeddings caching.
         kwargs: Additional parameters for residual vector quantizer.
     """
 
-    def __init__(self, dim: int, output_dim: int, device: str, attribute: str,
-                 quantize: bool, n_q: int, bins: int, checkpoint: tp.Union[str, Path], model_arch: str,
-                 enable_fusion: bool, sample_rate: int, max_audio_length: int, audio_stride: int,
-                 normalize: bool, text_p: bool, batch_size: tp.Optional[int] = None,
-                 autocast_dtype: tp.Optional[str] = 'float32', cache_path: tp.Optional[str] = None, **kwargs):
+    def __init__(
+        self, dim: int, output_dim: int, device: str, attribute: str,
+        checkpoint: tp.Union[str, Path], model_arch: str,
+        enable_fusion: bool, sample_rate: int, max_audio_length: int, audio_stride: int,
+        normalize: bool, batch_size: tp.Optional[int] = None, reduce: bool = True,
+        autocast_dtype: tp.Optional[str] = 'float32', **kwargs
+    ):
         try:
             import laion_clap  # type: ignore
         except ImportError:
             raise ImportError("Please install CLAP to use the CLAPEmbeddingConditioner: 'pip install laion_clap'")
-        warnings.warn("Sample rate for CLAP conditioner was fixed in version v1.1.0, (from 44.1 to 48 kHz). "
-                      "Please retrain all models.")
+        warnings.warn(
+            "Sample rate for CLAP conditioner was fixed in version v1.1.0, (from 44.1 to 48 kHz). "
+            "Please retrain all models."
+        )
         checkpoint = AudioCraftEnvironment.resolve_reference_path(checkpoint)
         clap_tokenize = RobertaTokenizer.from_pretrained('roberta-base', device_map="cpu")
         clap_model = laion_clap.CLAP_Module(enable_fusion=enable_fusion, amodel=model_arch, device="cpu")
         load_clap_state_dict(clap_model, checkpoint)
         clap_model.eval()
         clap_model.to(device)
-        super().__init__(dim=dim, output_dim=output_dim, device=device, attribute=attribute,
-                         autocast_dtype=autocast_dtype, quantize=quantize, n_q=n_q, bins=bins,
-                         **kwargs)
+        super().__init__(
+            dim=dim, output_dim=output_dim, device=device, attribute=attribute,
+            autocast_dtype=autocast_dtype, quantize=False, n_q=0, bins=0, **kwargs
+        )
         self.checkpoint = checkpoint
         self.enable_fusion = enable_fusion
         self.model_arch = model_arch
@@ -832,39 +1072,10 @@ class CLAPEmbeddingConditioner(JointEmbeddingConditioner):
         self.clap_stride = int(self.clap_sample_rate * audio_stride)
         self.batch_size = batch_size or 1
         self.normalize = normalize
-        self.text_p = text_p
+
         self.__dict__['clap_tokenize'] = clap_tokenize
         self.__dict__['clap'] = clap_model
-        self.wav_cache, self.text_cache = None, None
-        if cache_path is not None:
-            self.wav_cache = EmbeddingCache(Path(cache_path) / 'wav', self.device,
-                                            compute_embed_fn=self._get_wav_embedding_for_cache,
-                                            extract_embed_fn=self._extract_wav_embedding_chunk)
-            self.text_cache = EmbeddingCache(Path(cache_path) / 'text', self.device,
-                                             compute_embed_fn=self._get_text_embedding_for_cache)
-
-    def _tokenizer(self, texts: tp.Union[str, tp.List[str]]) -> dict:
-        # we use the default params from CLAP module here as well
-        return self.clap_tokenize(texts, padding="max_length", truncation=True, max_length=77, return_tensors="pt")
-
-    def _compute_text_embedding(self, text: tp.List[str]) -> torch.Tensor:
-        """Compute text embedding from CLAP model on a given a batch of text.
-
-        Args:
-            text (list[str]): List of text for the batch, with B items.
-        Returns:
-            torch.Tensor: CLAP embedding derived from text, of shape [B, 1, D], with D the CLAP embedding dimension.
-        """
-        with torch.no_grad():
-            embed = self.clap.get_text_embedding(text, tokenizer=self._tokenizer, use_tensor=True)
-            return embed.view(embed.size(0), 1, embed.size(-1))
-
-    def _get_text_embedding_for_cache(self, path: tp.Union[Path, str],
-                                      x: JointEmbedCondition, idx: int) -> torch.Tensor:
-        """Get text embedding function for the cache."""
-        text = x.text[idx]
-        text = text if text is not None else ""
-        return self._compute_text_embedding([text])[0]
+        self.reduce = reduce
 
     def _preprocess_wav(self, wav: torch.Tensor, length: torch.Tensor, sample_rates: tp.List[int]) -> torch.Tensor:
         """Preprocess wav to expected format by CLAP model.
@@ -922,123 +1133,55 @@ class CLAPEmbeddingConditioner(JointEmbeddingConditioner):
                 embed = embed.mean(dim=1, keepdim=True)
             return embed  # [B, F, D] with F=1 if reduce_mean is True
 
-    def _get_wav_embedding_for_cache(self, path: tp.Union[str, Path],
-                                     x: JointEmbedCondition, idx: int) -> torch.Tensor:
-        """Compute audio wave embedding for the cache.
-        The embedding is computed on a given audio read from file.
-
-        Args:
-            path (str or Path): Path to the full audio file.
-        Returns:
-            torch.Tensor: Single-item tensor of shape [F, D], F being the number of chunks, D the dimension.
-        """
-        wav, sr = audio_read(path)  # [C, T]
-        wav = wav.unsqueeze(0).to(self.device)  # [1, C, T]
-        wav_len = torch.LongTensor([wav.shape[-1]]).to(self.device)
-        embed = self._compute_wav_embedding(wav, wav_len, [sr], reduce_mean=False)  # [B, F, D]
-        return embed.squeeze(0)  # [F, D]
-
-    def _extract_wav_embedding_chunk(self, full_embed: torch.Tensor, x: JointEmbedCondition, idx: int) -> torch.Tensor:
-        """Extract the chunk of embedding matching the seek_time and length from the full CLAP audio embedding.
-
-        Args:
-            full_embed (torch.Tensor): CLAP embedding computed on the full wave, of shape [F, D].
-            x (JointEmbedCondition): Joint embedding condition for the full batch.
-            idx (int): Index considered for the given embedding to extract.
-        Returns:
-            torch.Tensor: Wav embedding averaged on sliding window, of shape [1, D].
-        """
-        sample_rate = x.sample_rate[idx]
-        seek_time = x.seek_time[idx]
-        seek_time = 0. if seek_time is None else seek_time
-        clap_stride = int(self.clap_stride / self.clap_sample_rate) * sample_rate
-        end_seek_time = seek_time + self.clap_max_frames / self.clap_sample_rate
-        start_offset = int(seek_time * sample_rate // clap_stride)
-        end_offset = int(end_seek_time * sample_rate // clap_stride)
-        wav_embed = full_embed[start_offset:end_offset, ...]
-        wav_embed = wav_embed.mean(dim=0, keepdim=True)
-        return wav_embed.to(self.device)  # [F, D]
-
-    def _get_text_embedding(self, x: JointEmbedCondition) -> torch.Tensor:
-        """Get CLAP embedding from a batch of text descriptions."""
-        no_nullified_cond = x.wav.shape[-1] > 1  # we don't want to read from cache when condition dropout
-        if self.text_cache is not None and no_nullified_cond:
-            assert all(p is not None for p in x.path), "Cache requires all JointEmbedCondition paths to be provided"
-            paths = [Path(p) for p in x.path if p is not None]
-            embed = self.text_cache.get_embed_from_cache(paths, x)
-        else:
-            text = [xi if xi is not None else "" for xi in x.text]
-            embed = self._compute_text_embedding(text)
-        if self.normalize:
-            embed = torch.nn.functional.normalize(embed, p=2.0, dim=-1)
-        return embed
-
     def _get_wav_embedding(self, x: JointEmbedCondition) -> torch.Tensor:
         """Get CLAP embedding from a batch of audio tensors (and corresponding sample rates)."""
-        no_undefined_paths = all(p is not None for p in x.path)
-        no_nullified_cond = x.wav.shape[-1] > 1  # we don't want to read from cache when condition dropout
-        if self.wav_cache is not None and no_undefined_paths and no_nullified_cond:
-            paths = [Path(p) for p in x.path if p is not None]
-            embed = self.wav_cache.get_embed_from_cache(paths, x)
-        else:
-            embed = self._compute_wav_embedding(x.wav, x.length, x.sample_rate, reduce_mean=True)
-        if self.normalize:
-            embed = torch.nn.functional.normalize(embed, p=2.0, dim=-1)
+        embed = self._compute_wav_embedding(x.wav, x.length, x.sample_rate, reduce_mean=False)
+
         return embed
 
     def tokenize(self, x: JointEmbedCondition) -> JointEmbedCondition:
-        # Trying to limit as much as possible sync points when the cache is warm.
-        no_undefined_paths = all(p is not None for p in x.path)
-        if self.wav_cache is not None and no_undefined_paths:
-            assert all([p is not None for p in x.path]), "Cache requires all JointEmbedCondition paths to be provided"
-            paths = [Path(p) for p in x.path if p is not None]
-            self.wav_cache.populate_embed_cache(paths, x)
-        if self.text_cache is not None and no_undefined_paths:
-            assert all([p is not None for p in x.path]), "Cache requires all JointEmbedCondition paths to be provided"
-            paths = [Path(p) for p in x.path if p is not None]
-            self.text_cache.populate_embed_cache(paths, x)
         return x
 
     def _get_embed(self, x: JointEmbedCondition) -> tp.Tuple[torch.Tensor, torch.Tensor]:
         """Extract shared latent representation from either the wav or the text using CLAP."""
-        # decide whether to use text embedding at train time or not
-        # TODO: why use wav embedding only while training, is it forbidden during evaluation?
-        use_text_embed = random.random() < self.text_p
-        if self.training and use_text_embed:
-            embed = self._get_text_embedding(x)
-            empty_idx = torch.LongTensor([i for i, xi in enumerate(x.text) if xi is None or xi == ""])
-        else:
-            embed = self._get_wav_embedding(x)
-            empty_idx = torch.LongTensor([])  # we assume we always have the audio wav
+        embed = self._get_wav_embedding(x)
+        empty_idx = torch.LongTensor([
+            i
+            for i, wav in enumerate(x.wav)
+            if wav.sum().item() == 0
+        ])
 
         return embed, empty_idx
 
+    def forward(self, x: JointEmbedCondition) -> ConditionType:
+        with self.autocast:
+            B = x.wav.shape[0]
+            embed, empty_idx = self._get_embed(x)
+
+            out_embed = self.output_proj(embed).view(B, -1, self.output_dim)
+
+            if self.normalize:
+                out_embed = torch.nn.functional.normalize(out_embed, p=2.0, dim=-1)
+
+            mask = torch.ones(*out_embed.shape[:2], device=out_embed.device)
+            mask[empty_idx, :] = 0  # zero-out index where the input is non-existant
+            out_embed = (out_embed * mask.unsqueeze(-1))
+
+            return out_embed, mask
+
 
 class CLIPEmbeddingConditioner(JointEmbeddingConditioner):
-    """Joint Embedding conditioner based on pre-trained CLAP model.
-
-    This CLAP-based conditioner supports a caching mechanism
-    over the computed embeddings for faster training.
+    """Joint Embedding conditioner based on pre-trained CLIP model.
 
     Args:
         dim (int): Dimension.
         output_dim (int): Output dimension.
         device (str): Device.
         attribute (str): Attribute used by the conditioner.
-        quantize (bool): Whether to quantize the CLAP embedding.
-        n_q (int): Number of residual quantizers (used if quantize is true).
-        bins (int): Quantizers' codebooks size (used if quantize is true).
-        checkpoint (str): Path to CLAP checkpoint.
         model_arch (str): CLAP model architecture.
-        enable_fusion (bool): Enable fusion for CLAP model.
-        sample_rate (int): Sample rate used by CLAP model.
-        max_audio_length (float): Maximum audio length for CLAP model.
-        audio_stride (float): Stride to use for getting a CLAP embedding on the full sequence.
         normalize (bool): Whether to normalize the CLAP embedding.
-        text_p (float): Probability of using text representation instead of audio at train time.
         batch_size (Optional[int]): Batch size for CLAP embedding computation.
         autocast_dtype (str): Autocast for the conditioner.
-        cache_path (Optional[str]): Path for pre-computed embeddings caching.
         kwargs: Additional parameters for residual vector quantizer.
     """
 

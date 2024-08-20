@@ -4,6 +4,7 @@ od:
   # match_req_grad: ["condition_provider"]
   # match_req_grad: ["condition_provider","cross_attention"]
   match_req_grad: ["condition_provider", "transformer", "out_norm", "linears","emb"]  # full
+
 classifier_free_guidance:
   training_dropout: 0.3
   inference_coef: 3.0
@@ -33,12 +34,7 @@ conditioners:
       dim: 512
       attribute: description
       normalize: true
-      quantize: true  # use RVQ quantization
-      n_q: 12
-      bins: 1024
-      kmeans_iters: 50
-      text_p: 0.  # probability of using text embed at train time
-      cache_path: null
+      reduce: false
 
 dataset:
   joint_embed_attributes: [description]
