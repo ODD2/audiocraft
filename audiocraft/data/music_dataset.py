@@ -297,6 +297,12 @@ class MusicDataset(InfoAudioDataset):
                     if (s_end - s_beg < self.segment_duration):
                         continue
 
+                    if (s_mid + self.segment_duration * 0.5 > s_end):
+                        continue
+
+                    if (s_mid - self.segment_duration * 0.5 < s_beg):
+                        continue
+
                     seek_time = s_mid - (self.segment_duration * 0.5)
                     break
 
