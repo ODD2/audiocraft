@@ -285,6 +285,7 @@ class MusicDataset(InfoAudioDataset):
 
                 segments = segments[1:-1]
 
+                # determine transition segment
                 segment_idx = [i + 1 for i in range(len(segments) - 1)]
 
                 __rng.shuffle(segment_idx)
@@ -297,13 +298,10 @@ class MusicDataset(InfoAudioDataset):
                     if (s_end - s_beg < self.segment_duration):
                         continue
 
-                    if (s_mid + self.segment_duration * 0.5 > s_end):
-                        continue
-
-                    if (s_mid - self.segment_duration * 0.5 < s_beg):
-                        continue
-
-                    seek_time = s_mid - (self.segment_duration * 0.5)
+                    left_bound = max(s_mid - self.segment_duration, s_beg)
+                    right_bound = min(s_mid + self.segment_duration, s_end)
+                    seek_time = __rng.random() * (right_bound - left_bound - self.segment_duration) + left_bound
+                    seg_norm = (s_mid - seek_time) / self.segment_duration
                     break
 
                 else:
@@ -326,15 +324,16 @@ class MusicDataset(InfoAudioDataset):
 
         if self.return_info:
             # Returns the wav and additional information on the wave segment
-            return out, AudioInfo(**segment_info.to_dict())
+            return out, AudioInfo(**segment_info.to_dict()), seg_norm
         else:
             return out
 
     def __getitem__(self, index):
         if self.dataset_mode == "standard":
             wav, info = self.__standard_getitem__(index)
+            seg_norm = -1
         elif self.dataset_mode == "transition":
-            wav, info = self.__transition_getitem__(index)
+            wav, info, seg_norm = self.__transition_getitem__(index)
         else:
             raise NotImplementedError(f"Dataset mode {self.dataset_mode} not implemented.")
 
@@ -375,9 +374,14 @@ class MusicDataset(InfoAudioDataset):
         for att in self.joint_embed_attributes:
             att_value = getattr(music_info, att)
             joint_embed_cond = JointEmbedCondition(
-                wav[None].clone(), [att_value], torch.tensor([info.n_frames]),
-                sample_rate=[info.sample_rate], path=[info.meta.path], seek_time=[info.seek_time],
-                frames=frames
+                wav[None].clone(),
+                [att_value],
+                torch.tensor([info.n_frames]),
+                sample_rate=[info.sample_rate],
+                path=[info.meta.path],
+                seek_time=[info.seek_time],
+                frames=frames,
+                seg_norm=[seg_norm]
             )
             music_info.joint_embed[att] = joint_embed_cond
 

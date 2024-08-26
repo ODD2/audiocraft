@@ -58,7 +58,8 @@ class JointEmbedCondition(tp.NamedTuple):
     sample_rate: tp.List[int]
     path: tp.List[tp.Optional[str]] = []
     seek_time: tp.List[tp.Optional[float]] = []
-    frames: torch.Tensor = None
+    frames: torch.Tensor = None,
+    seg_norm: tp.List[tp.Optional[float]] = [],
 
 
 @dataclass
@@ -181,7 +182,8 @@ def nullify_joint_embed(embed: JointEmbedCondition) -> JointEmbedCondition:
         sample_rate=embed.sample_rate,
         path=[None] * embed.wav.shape[0],
         seek_time=[0] * embed.wav.shape[0],
-        frames=null_frames
+        frames=null_frames,
+        seg_norm=[-1] * embed.wav.shape[0],
     )
 
 
