@@ -205,12 +205,17 @@ class MusicDataset(InfoAudioDataset):
     See `audiocraft.data.info_audio_dataset.InfoAudioDataset` for full initialization arguments.
     """
 
-    def __init__(self, *args, info_fields_required: bool = True,
-                 merge_text_p: float = 0., drop_desc_p: float = 0., drop_other_p: float = 0.,
-                 joint_embed_attributes: tp.List[str] = [],
-                 paraphrase_source: tp.Optional[str] = None, paraphrase_p: float = 0,
-                 n_frames: int = 10,
-                 ** kwargs):
+    def __init__(
+        self, *args,
+        info_fields_required: bool = True,
+        merge_text_p: float = 0., drop_desc_p: float = 0., drop_other_p: float = 0.,
+        joint_embed_attributes: tp.List[str] = [],
+        paraphrase_source: tp.Optional[str] = None, paraphrase_p: float = 0,
+        dataset_mode="standard",
+        analysis_path=None,
+        n_frames: int = 10,
+        ** kwargs
+    ):
         kwargs['return_info'] = True  # We require the info for each song of the dataset.
         super().__init__(*args, **kwargs)
         self.info_fields_required = info_fields_required
@@ -220,6 +225,8 @@ class MusicDataset(InfoAudioDataset):
         self.joint_embed_attributes = joint_embed_attributes
         self.paraphraser = None
         self.n_frames = n_frames
+        self.dataset_mode = dataset_mode
+        self.anaylsis_path = analysis_path
         self.frame_transform = Compose([
             Resize((380, 380), interpolation=InterpolationMode.BICUBIC, antialias=True)
         ])
@@ -227,8 +234,104 @@ class MusicDataset(InfoAudioDataset):
         if paraphrase_source is not None:
             self.paraphraser = Paraphraser(paraphrase_source, paraphrase_p)
 
+        if (self.dataset_mode == "transition"):
+            assert not analysis_path is None, "analysis_path is required for transition dataset"
+
+    def __standard_getitem__(self, index):
+        return super().__getitem__(index)
+
+    def __transition_getitem__(self, index):
+        import os
+        import numpy as np
+        import torch.nn.functional as F
+        from audiocraft.data.audio_dataset import audio_read, convert_audio, SegmentInfo
+
+        assert self.segment_duration is not None, "Transition dataset requires segment_duration to be set."
+
+        rng = torch.Generator()
+
+        if self.shuffle:
+            # We use index, plus extra randomness, either totally random if we don't know the epoch.
+            # otherwise we make use of the epoch number and optional shuffle_seed.
+            if self.current_epoch is None:
+                seed = index + self.num_samples * random.randint(0, 2**24)
+                rng.manual_seed(seed)
+                __rng = np.random.RandomState(seed)
+            else:
+                seed = index + self.num_samples * (self.current_epoch + self.shuffle_seed)
+                rng.manual_seed(seed)
+                __rng = np.random.RandomState(seed)
+        else:
+            # We only use index
+            rng.manual_seed(index)
+            __rng = np.random.RandomState(index)
+
+        for retry in range(self.max_read_retry):
+            file_meta = self.sample_file(index, rng)
+            # We add some variance in the file position even if audio file is smaller than segment
+            # without ending up with empty segments
+            try:
+                ent_name = os.path.basename(file_meta.path).split('.')[0]
+
+                # load analysis
+                with open(os.path.join(self.anaylsis_path, f"{ent_name}.json")) as f:
+                    analy_data = json.load(f)
+
+                segments = analy_data["segments"]
+                segments = concat_segments(segments)
+
+                if len(segments) < 3:
+                    raise Exception("no sufficient segment after removing head/tail.")
+
+                segments = segments[1:-1]
+
+                segment_idx = [i + 1 for i in range(len(segments) - 1)]
+
+                __rng.shuffle(segment_idx)
+
+                for s_idx in segment_idx:
+                    s_beg = segments[s_idx - 1]["start"]
+                    s_end = segments[s_idx]["end"]
+                    s_mid = segments[s_idx]["start"]
+
+                    if (s_end - s_beg < self.segment_duration):
+                        continue
+
+                    seek_time = s_mid - (self.segment_duration * 0.5)
+                    break
+
+                else:
+                    raise Exception("no valid segment found.")
+
+                out, sr = audio_read(file_meta.path, seek_time, self.segment_duration, pad=False)
+                out = convert_audio(out, sr, self.sample_rate, self.channels)
+                n_frames = out.shape[-1]
+                target_frames = int(self.segment_duration * self.sample_rate)
+                if self.pad:
+                    out = F.pad(out, (0, target_frames - n_frames))
+                segment_info = SegmentInfo(file_meta, seek_time, n_frames=n_frames, total_frames=target_frames,
+                                           sample_rate=self.sample_rate, channels=out.shape[0])
+            except Exception as exc:
+                logger.warning("Error opening file %s: %r", file_meta.path, exc)
+                if retry == self.max_read_retry - 1:
+                    raise
+            else:
+                break
+
+        if self.return_info:
+            # Returns the wav and additional information on the wave segment
+            return out, AudioInfo(**segment_info.to_dict())
+        else:
+            return out
+
     def __getitem__(self, index):
-        wav, info = super().__getitem__(index)
+        if self.dataset_mode == "standard":
+            wav, info = self.__standard_getitem__(index)
+        elif self.dataset_mode == "transition":
+            wav, info = self.__transition_getitem__(index)
+        else:
+            raise NotImplementedError(f"Dataset mode {self.dataset_mode} not implemented.")
+
         info_data = info.to_dict()
         music_info_path = Path(info.meta.path).with_suffix('.json')
         music_video_path = Path(info.meta.path).with_suffix('.mp4')
@@ -275,37 +378,6 @@ class MusicDataset(InfoAudioDataset):
         return wav, music_info
 
 
-# def fetch_frames(video_path, duration, offset=0, num_frames=10, transform=(lambda x: x)):
-#     vr = TorchVideoReader(video_path, "video")
-#     stride = duration / (num_frames - 1)  # number of video frames
-#     frames = []
-#     for i in range(num_frames):
-#         print(offset + i * stride)
-#         vr.seek(offset + i * stride)
-#         frame = next(vr)["data"]
-#         frame = transform(frame)
-#         frames.append(frame)
-#     frames = torch.stack(frames)
-#     del vr
-#     return frames
-
-
-# def fetch_frames(video_path, duration, offset=0, num_frames=10, transform=(lambda x: x)):
-#     from decord import VideoReader as DecordVideoReader
-#     vr = DecordVideoReader(video_path)
-#     fps = vr.get_avg_fps()
-#     offset = int(offset * fps)
-#     duration = int(duration * fps)
-
-#     stride = int((min(offset + duration, len(vr)) - offset) / (num_frames - 1))  # number of video frames
-#     frames = vr.get_batch([offset + i * stride for i in range(num_frames)]).asnumpy()
-#     frames = torch.from_numpy(frames).permute((0, 3, 1, 2))
-#     frames = transform(frames)
-
-#     del vr
-#     return frames
-
-
 def fetch_frames(video_path, duration, offset=0, num_frames=10, transform=(lambda x: x)):
     frames = torchvision.io.read_video(video_path, offset, offset + duration, 'sec', 'TCHW')[0]
     if (num_frames > 1):
@@ -313,6 +385,7 @@ def fetch_frames(video_path, duration, offset=0, num_frames=10, transform=(lambd
     else:
         stride = 0
     frames = frames[[int(i * stride) for i in range(num_frames)]]
+    assert frames.shape[0] == num_frames, "number of frames is not correct"
     frames = transform(frames)
     return frames
 
@@ -336,3 +409,17 @@ def get_bpm(value: tp.Optional[str]) -> tp.Optional[float]:
         return float(value)
     except ValueError:
         return None
+
+
+def concat_segments(segments):
+    _segments = [dict(label="__holder__", start=0, beg=0)]
+    for i, seg in enumerate(segments):
+        if not (_segments[-1]["label"] == seg["label"]):
+            _segments[-1]["end"] = seg["start"]
+            _segments.append(seg)
+        elif i == len(segments) - 1:
+            _segments[-1]["end"] = seg["end"]
+        else:
+            continue
+    _segments.pop(0)
+    return _segments

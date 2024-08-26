@@ -162,6 +162,53 @@ class MusicGen(BaseGenModel):
             return self.generate_audio(tokens), tokens
         return self.generate_audio(tokens)
 
+    def generate_with_prior(
+        self, descriptions: tp.List[str],
+        prompt_wavs: MelodyType,
+        prompt_sample_rate: int,
+        progress: bool = False,
+        return_tokens: bool = False
+    ) -> tp.Union[torch.Tensor, tp.Tuple[torch.Tensor, torch.Tensor]]:
+        """Generate samples conditioned on text and melody.
+
+        Args:
+            descriptions (list of str): A list of strings used as text conditioning.
+            prompt_wavs: (torch.Tensor or list of Tensor): A batch of waveforms used as
+                melody conditioning. Should have shape [B, C, T] with B matching the description length,
+                C=1 or 2. It can be [C, T] if there is a single description. It can also be
+                a list of [C, T] tensors.
+            prompt_sample_rate: (int): Sample rate of the melody waveforms.
+            progress (bool, optional): Flag to display progress of the generation process. Defaults to False.
+        """
+        if isinstance(prompt_wavs, torch.Tensor):
+            if prompt_wavs.dim() == 2:
+                prompt_wavs = prompt_wavs[None]
+            if prompt_wavs.dim() != 3:
+                raise ValueError("Melody wavs should have a shape [B, C, T].")
+            prompt_wavs = list(prompt_wavs)
+        else:
+            for melody in prompt_wavs:
+                if melody is not None:
+                    assert melody.dim() == 2, "One melody in the list has the wrong number of dims."
+
+        prompt_wavs = torch.stack([
+            convert_audio(wav, prompt_sample_rate, self.sample_rate, self.audio_channels)
+            if wav is not None else None
+            for wav in prompt_wavs
+        ])
+        attributes, prompt_tokens = self._prepare_tokens_and_attributes(
+            descriptions=descriptions,
+            prompt=prompt_wavs,
+            melody_wavs=None
+        )
+
+        tokens = self._generate_tokens(attributes, prompt_tokens, progress)
+
+        if return_tokens:
+            return self.generate_audio(tokens), tokens
+
+        return self.generate_audio(tokens)
+
     @torch.no_grad()
     def _prepare_tokens_and_attributes(
             self,
